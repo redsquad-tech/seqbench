@@ -1,0 +1,19 @@
+version: 1
+rules:
+  - probe: retrieval.babi.full_vs_oracle
+    when: {retention_lt: 0.7}
+    diagnosis: retrieval_or_routing_bottleneck
+    next_probes: [retrieval.babilong.length_transfer]
+  - probe: binding.clutrr.nonce
+    when: {retention_lt: 0.7}
+    diagnosis: lexical_shortcut_or_memorization
+    next_probes: [binding.clutrr.counterfactual]
+  - probe: composition.recogs.novel_output
+    when: {retention_lt: 0.5}
+    diagnosis: whole_value_retrieval_without_productive_decoder
+    next_probes: [composition.slog.structural]
+  - probe: credit.proofwriter.final_vs_proof
+    when: {retention_lt: 0.7}
+    diagnosis: credit_assignment_bottleneck
+    next_probes: [reasoning.proofwriter.depth]
+

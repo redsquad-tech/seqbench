@@ -1,0 +1,6 @@
+id: noise_robustness
+version: 1
+required_probes:
+  - noise.clutrr.train_20
+aggregation: all_required
+

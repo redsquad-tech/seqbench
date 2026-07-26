@@ -1,0 +1,6 @@
+id: multi_hop
+version: 1
+required_probes:
+  - reasoning.proofwriter.depth
+aggregation: all_required
+

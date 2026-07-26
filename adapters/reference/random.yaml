@@ -1,0 +1,4 @@
+command: ["./simple.py", "--strategy", "random"]
+manifest: manifest.json
+initial_model: model
+

@@ -1,0 +1,3 @@
+command: ["./simple.py", "--strategy", "memorizer"]
+manifest: manifest.json
+initial_model: model

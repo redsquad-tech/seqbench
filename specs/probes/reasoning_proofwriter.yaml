@@ -1,0 +1,25 @@
+id: reasoning.proofwriter.depth
+property: multi_hop
+version: 1
+protocol: fixed
+requires: [generate]
+train:
+  select: {dataset: proofwriter, split: train, variant: full}
+control:
+  select:
+    dataset: proofwriter
+    split: test
+    variant: full
+    metadata.reasoning_depth: {lte: 1}
+stress:
+  select:
+    dataset: proofwriter
+    split: test
+    variant: full
+    metadata.reasoning_depth: {gte: 3}
+pair_by: source_example_id
+metrics:
+  primary: normalized_exact_match
+  optional: [candidate_accuracy, nll_bits]
+difficulty_axes: [reasoning_depth]
+options: {train_limit: 10000, eval_limit: 2000, paired: false}

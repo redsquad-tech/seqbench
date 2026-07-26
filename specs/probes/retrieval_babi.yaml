@@ -1,0 +1,18 @@
+id: retrieval.babi.full_vs_oracle
+property: retrieval
+version: 1
+protocol: fixed
+requires: [generate]
+train:
+  select: {dataset: babi, task: qa2, split: train, variant: full}
+control:
+  select: {dataset: babi, task: qa2, split: test, variant: oracle}
+stress:
+  select: {dataset: babi, task: qa2, split: test, variant: full}
+pair_by: probe_group_id
+metrics:
+  primary: normalized_exact_match
+  optional: [nll_bits, token_f1]
+difficulty_axes: [context_length, distractor_count]
+options: {train_limit: 10000, eval_limit: 2000}
+

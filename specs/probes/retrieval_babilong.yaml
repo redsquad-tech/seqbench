@@ -1,0 +1,18 @@
+id: retrieval.babilong.length_transfer
+property: retrieval
+version: 1
+protocol: fixed
+requires: [generate]
+train:
+  select: {dataset: babilong, config: 0k, variant: full}
+control:
+  select: {dataset: babilong, config: 1k, variant: full}
+stress:
+  select: {dataset: babilong, config: 16k, variant: full}
+pair_by: source_example_id
+metrics:
+  primary: normalized_exact_match
+  optional: [nll_bits, token_f1]
+difficulty_axes: [context_length]
+options: {train_limit: 1000, eval_limit: 1000}
+

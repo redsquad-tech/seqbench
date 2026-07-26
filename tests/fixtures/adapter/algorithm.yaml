@@ -1,0 +1,4 @@
+command: ["../../../adapters/reference/simple.py", "--strategy", "constant"]
+manifest: ../../../adapters/reference/manifest.json
+initial_model: ../../../adapters/reference/model
+

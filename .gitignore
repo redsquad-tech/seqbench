@@ -1,0 +1,10 @@
+.venv/
+.data/
+data/
+runs/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.egg-info/
+*.csv
+*.parquet

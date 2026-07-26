@@ -1,0 +1,6 @@
+id: credit_assignment
+version: 1
+required_probes:
+  - credit.proofwriter.final_vs_proof
+aggregation: all_required
+

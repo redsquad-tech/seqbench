@@ -1,0 +1,17 @@
+id: composition.slog.structural
+property: composition
+version: 1
+protocol: fixed
+requires: [generate]
+train:
+  select: {dataset: slog, split: train, variant: full}
+control:
+  select: {dataset: slog, split: test, variant: full}
+stress:
+  select: {dataset: slog, split: generalization, variant: full}
+pair_by: source_example_id
+metrics:
+  primary: normalized_exact_match
+  optional: [token_f1, edit_similarity, nll_bits]
+difficulty_axes: [context_length]
+options: {train_limit: 10000, eval_limit: 2000, max_output_tokens: 256, paired: false}

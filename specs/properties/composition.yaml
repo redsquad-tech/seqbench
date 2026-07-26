@@ -1,0 +1,7 @@
+id: composition
+version: 1
+required_probes:
+  - composition.recogs.novel_output
+  - composition.slog.structural
+aggregation: all_required
+

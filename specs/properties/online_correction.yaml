@@ -1,0 +1,6 @@
+id: online_correction
+version: 1
+required_probes:
+  - correction.clutrr.one_example
+aggregation: all_required
+

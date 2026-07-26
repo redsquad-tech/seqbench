@@ -1,0 +1,18 @@
+id: binding.clutrr.nonce
+property: role_binding
+version: 1
+protocol: fixed
+requires: [generate]
+train:
+  select: {dataset: clutrr, split: train, variant: full}
+control:
+  select: {dataset: clutrr, split: test, variant: full}
+stress:
+  select: {dataset: clutrr, split: test, variant: nonce}
+pair_by: probe_group_id
+metrics:
+  primary: normalized_exact_match
+  optional: [candidate_accuracy, nll_bits]
+difficulty_axes: [reasoning_depth, distractor_count]
+options: {train_limit: 10000, eval_limit: 2000}
+

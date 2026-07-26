@@ -1,0 +1,11 @@
+{
+  "name": "seqbench-simple-reference",
+  "version": "1",
+  "capabilities": {
+    "learn": true,
+    "generate": true,
+    "score": true
+  },
+  "external_pretraining": false
+}
+
