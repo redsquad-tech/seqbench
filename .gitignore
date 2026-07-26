@@ -8,3 +8,5 @@ __pycache__/
 *.egg-info/
 *.csv
 *.parquet
+!tests/fixtures/data/
+!tests/fixtures/**/*.csv
