@@ -127,6 +127,36 @@ def test_streaming_route_stratifies_evaluation_limit(tmp_path: Path) -> None:
     assert [task.target for task in destination].count("b") == 2
 
 
+def test_identical_training_is_reused_within_run(tmp_path: Path) -> None:
+    runner = Runner(
+        run_spec=ROOT / "specs/runs/smoke.yaml",
+        algorithm_spec=ROOT / "tests/fixtures/adapter/algorithm.yaml",
+        task_paths=[ROOT / "tests/fixtures/data/tasks.csv"],
+        output=tmp_path / "unused",
+    )
+    probe = runner.probes[0]
+    tasks = runner.route_tasks()[probe.id].train
+    budget = runner.spec.budgets[0]
+    first = runner._learn(
+        probe=probe,
+        tasks=tasks,
+        seed=0,
+        budget=budget,
+        destination=tmp_path / "first",
+        phase="first",
+    )
+    second = runner._learn(
+        probe=probe,
+        tasks=tasks,
+        seed=0,
+        budget=budget,
+        destination=tmp_path / "second",
+        phase="second",
+    )
+    assert checkpoint_hash(first) == checkpoint_hash(second)
+    assert runner.resources[-1]["cached"] is True
+
+
 def test_compare_aggregates_black_box_runs(tmp_path: Path) -> None:
     left = tmp_path / "left"
     right = tmp_path / "right"

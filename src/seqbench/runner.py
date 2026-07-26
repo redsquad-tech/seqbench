@@ -20,7 +20,7 @@ from .metrics import (
     paired_bootstrap,
     unpaired_bootstrap,
 )
-from .process import Algorithm, copy_checkpoint
+from .process import Algorithm, checkpoint_bytes, copy_checkpoint
 from .report import write_reports
 from .schema import Task
 from .specs import Probe, PropertySpec, RunSpec
@@ -62,6 +62,7 @@ class Runner:
         self.predictions: list[dict[str, Any]] = []
         self.resources: list[dict[str, Any]] = []
         self.curves: list[dict[str, Any]] = []
+        self._learn_cache: dict[str, Path] = {}
         self.calibration = self._load_calibration()
 
     def _load_calibration(self) -> dict[str, Any]:
@@ -185,6 +186,25 @@ class Runner:
         if not tasks or not self.algorithm.manifest["capabilities"]["learn"]:
             copy_checkpoint(self.algorithm.initial_model, destination)
             return destination
+        fingerprint = _training_fingerprint(tasks, seed=seed, budget=budget)
+        cached = self._learn_cache.get(fingerprint)
+        if cached is not None:
+            started = time.perf_counter()
+            copy_checkpoint(cached, destination)
+            self.resources.append(
+                {
+                    "probe": probe.id,
+                    "seed": seed,
+                    "phase": phase,
+                    "operation": "learn",
+                    "wall_seconds": time.perf_counter() - started,
+                    "peak_ram_bytes": 0,
+                    "checkpoint_bytes": checkpoint_bytes(destination),
+                    "examples": len(tasks),
+                    "cached": True,
+                }
+            )
+            return destination
         examples = [
             {"id": task.id, "input": task.input, "target": task.target}
             for task in tasks
@@ -205,6 +225,7 @@ class Runner:
                 **_resource_fields(resource),
             }
         )
+        self._learn_cache[fingerprint] = destination
         return destination
 
     def _evaluate(
@@ -825,6 +846,20 @@ def _task_field(task: Task, field: str) -> object:
     if field.startswith("metadata."):
         return task.metadata.get(field.removeprefix("metadata."))
     return getattr(task, field)
+
+
+def _training_fingerprint(
+    tasks: list[Task], *, seed: int, budget: dict[str, Any]
+) -> str:
+    digest = hashlib.sha256()
+    digest.update(str(seed).encode())
+    digest.update(json.dumps(budget, sort_keys=True, separators=(",", ":")).encode())
+    for task in tasks:
+        for value in (task.id, task.input, task.target):
+            encoded = value.encode()
+            digest.update(len(encoded).to_bytes(8, "big"))
+            digest.update(encoded)
+    return digest.hexdigest()
 
 
 def _resource_fields(resource: dict[str, Any]) -> dict[str, Any]:
