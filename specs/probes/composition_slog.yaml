@@ -4,11 +4,11 @@ version: 1
 protocol: fixed
 requires: [generate]
 train:
-  select: {dataset: slog, split: train, variant: full}
+  select: {dataset: slog, config: cogs_LF, split: train, variant: full}
 control:
-  select: {dataset: slog, split: test, variant: full}
+  select: {dataset: slog, config: cogs_LF, split: test, variant: full}
 stress:
-  select: {dataset: slog, split: generalization, variant: full}
+  select: {dataset: slog, config: cogs_LF, split: generalization, variant: full}
 pair_by: source_example_id
 metrics:
   primary: normalized_exact_match

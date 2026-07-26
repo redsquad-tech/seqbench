@@ -2,17 +2,20 @@ id: correction.clutrr.one_example
 property: online_correction
 version: 1
 protocol: correction
-requires: [learn, generate]
+requires: [learn, generate, score]
 train:
-  select: {dataset: clutrr, split: train, variant: full}
+  select: {dataset: clutrr, config: gen_train23_test2to10, split: train, variant: full}
 control:
-  select: {dataset: clutrr, split: test, variant: full}
+  select: {dataset: clutrr, config: gen_train23_test2to10, split: test, variant: full}
 stress:
-  select: {dataset: proofwriter, split: test, variant: full}
+  select: {dataset: clutrr, config: gen_train23_test2to10, split: test, variant: full}
 pair_by: probe_group_id
 metrics:
-  primary: normalized_exact_match
-  optional: [nll_bits]
+  primary: capped_nll_bits
+  optional: [normalized_exact_match, target_probability_zero]
 difficulty_axes: [reasoning_depth]
-options: {train_limit: 10000, eval_limit: 200, corrections: 1}
-
+options:
+  train_limit: 10000
+  eval_limit: 1000
+  minimum_related: 5
+  related_limit: 100

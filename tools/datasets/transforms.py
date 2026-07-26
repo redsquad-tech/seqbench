@@ -4,6 +4,7 @@ import ast
 import csv
 import random
 import re
+import sys
 from collections.abc import Callable, Iterator
 from dataclasses import replace
 from pathlib import Path
@@ -12,6 +13,13 @@ from seqbench.schema import CSV_COLUMNS, Task
 
 
 def iter_csv(path: Path) -> Iterator[Task]:
+    limit = sys.maxsize
+    while True:
+        try:
+            csv.field_size_limit(limit)
+            break
+        except OverflowError:
+            limit //= 10
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
         if reader.fieldnames != CSV_COLUMNS:

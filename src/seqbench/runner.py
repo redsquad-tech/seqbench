@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +16,7 @@ from .diagnostics import apply_diagnostics
 from .metrics import (
     difficulty_curves,
     enrich_prediction,
+    higher_is_better,
     paired_bootstrap,
     unpaired_bootstrap,
 )
@@ -33,10 +36,6 @@ class ProbeData:
     stress: list[Task]
 
 
-def _limit(items: list[Task], value: object) -> list[Task]:
-    return items if value is None else items[: int(value)]
-
-
 class Runner:
     def __init__(
         self,
@@ -45,6 +44,9 @@ class Runner:
         algorithm_spec: Path,
         task_paths: list[Path],
         output: Path,
+        seeds: tuple[int, ...] | None = None,
+        train_limit: int | None = None,
+        eval_limit: int | None = None,
     ):
         self.spec = RunSpec.load(run_spec)
         self.algorithm = Algorithm.load(algorithm_spec)
@@ -54,6 +56,9 @@ class Runner:
         ]
         self.task_paths = [path.resolve() for path in task_paths]
         self.output = output.resolve()
+        self.seeds = seeds or self.spec.seeds
+        self.train_limit = train_limit
+        self.eval_limit = eval_limit
         self.predictions: list[dict[str, Any]] = []
         self.resources: list[dict[str, Any]] = []
         self.curves: list[dict[str, Any]] = []
@@ -70,29 +75,102 @@ class Runner:
             probe.id: ProbeData(train=[], stress_train=[], control=[], stress=[])
             for probe in self.probes
         }
+        seen_groups: dict[tuple[str, str], set[str]] = defaultdict(set)
+        stratum_counts: dict[tuple[str, str, str], int] = defaultdict(int)
         for task in iter_tasks(self.task_paths):
             for probe in self.probes:
                 data = routed[probe.id]
                 if matches(task, probe.train):
-                    data.train.append(task)
+                    self._append_routed(
+                        data.train,
+                        task,
+                        probe,
+                        "train",
+                        seen_groups,
+                        stratum_counts,
+                    )
                 stress_train_selector = probe.options.get("stress_train")
                 if isinstance(stress_train_selector, dict) and matches(
                     task, stress_train_selector
                 ):
-                    data.stress_train.append(task)
+                    self._append_routed(
+                        data.stress_train,
+                        task,
+                        probe,
+                        "stress_train",
+                        seen_groups,
+                        stratum_counts,
+                    )
                 if matches(task, probe.control):
-                    data.control.append(task)
+                    self._append_routed(
+                        data.control,
+                        task,
+                        probe,
+                        "control",
+                        seen_groups,
+                        stratum_counts,
+                    )
                 if matches(task, probe.stress):
-                    data.stress.append(task)
-        for probe in self.probes:
-            data = routed[probe.id]
-            data.train = _limit(data.train, probe.options.get("train_limit"))
-            data.stress_train = _limit(
-                data.stress_train, probe.options.get("train_limit")
-            )
-            data.control = _limit(data.control, probe.options.get("eval_limit"))
-            data.stress = _limit(data.stress, probe.options.get("eval_limit"))
+                    self._append_routed(
+                        data.stress,
+                        task,
+                        probe,
+                        "stress",
+                        seen_groups,
+                        stratum_counts,
+                    )
         return routed
+
+    def _append_routed(
+        self,
+        destination: list[Task],
+        task: Task,
+        probe: Probe,
+        section: str,
+        seen_groups: dict[tuple[str, str], set[str]],
+        stratum_counts: dict[tuple[str, str, str], int],
+    ) -> None:
+        training = section in {"train", "stress_train"}
+        configured = probe.options.get("train_limit" if training else "eval_limit")
+        override = self.train_limit if training else self.eval_limit
+        limit = min(
+            value for value in (configured, override) if value is not None
+        ) if configured is not None or override is not None else None
+        stratify_by = probe.options.get(
+            "train_stratify_by" if training else "eval_stratify_by"
+        )
+        strata = probe.options.get(
+            "train_strata" if training else "eval_strata"
+        )
+        if stratify_by and strata:
+            value = _task_field(task, str(stratify_by))
+            normalized_strata = [str(item) for item in strata]
+            stratum = str(value)
+            if stratum not in normalized_strata:
+                return
+            if limit is not None:
+                index = normalized_strata.index(stratum)
+                base, remainder = divmod(int(limit), len(normalized_strata))
+                stratum_limit = base + int(index < remainder)
+                key = (probe.id, section, stratum)
+                if stratum_counts[key] >= stratum_limit:
+                    return
+                stratum_counts[key] += 1
+            destination.append(task)
+            return
+        group_field = (
+            probe.options.get("train_limit_by") if training else None
+        )
+        if group_field:
+            group = str(getattr(task, str(group_field)))
+            groups = seen_groups[(probe.id, section)]
+            if group not in groups:
+                if limit is not None and len(groups) >= int(limit):
+                    return
+                groups.add(group)
+            destination.append(task)
+        elif limit is None or len(destination) < int(limit):
+            destination.append(task)
 
     def _learn(
         self,
@@ -310,10 +388,62 @@ class Runner:
             destination=before,
             phase="base_train",
         )
-        related = self._evaluate(
+        pool = self._evaluate(
             probe=probe,
             model=before,
             tasks=data.control,
+            stage="selection",
+            seed=seed,
+            budget_index=budget_index,
+            budget=budget,
+        )
+        tasks_by_id = {task.id: task for task in data.control}
+        ranked_failures = sorted(
+            (row for row in pool if row["normalized_exact_match"] == 0),
+            key=lambda row: _seeded_rank(seed, row["task_id"]),
+        )
+        minimum_related = int(probe.options.get("minimum_related", 5))
+        correction_row = next(
+            (
+                row
+                for row in ranked_failures
+                if sum(
+                    item.target == row["target"] and item.id != row["task_id"]
+                    for item in data.control
+                )
+                >= minimum_related
+            ),
+            None,
+        )
+        if correction_row is None:
+            return
+        correction_task = tasks_by_id[correction_row["task_id"]]
+        related_limit = int(probe.options.get("related_limit", 100))
+        related = sorted(
+            (
+                task
+                for task in data.control
+                if task.target == correction_task.target
+                and task.id != correction_task.id
+            ),
+            key=lambda task: _seeded_rank(seed, task.id),
+        )[:related_limit]
+        target_depth = correction_task.metadata.get("reasoning_depth")
+        unrelated = sorted(
+            (
+                task
+                for task in data.control
+                if task.target != correction_task.target
+            ),
+            key=lambda task: (
+                _depth_distance(target_depth, task.metadata.get("reasoning_depth")),
+                _seeded_rank(seed, task.id),
+            ),
+        )[: len(related)]
+        self._evaluate(
+            probe=probe,
+            model=before,
+            tasks=related,
             stage="before_related",
             seed=seed,
             budget_index=budget_index,
@@ -322,27 +452,22 @@ class Runner:
         self._evaluate(
             probe=probe,
             model=before,
-            tasks=data.stress,
+            tasks=unrelated,
             stage="before_unrelated",
             seed=seed,
             budget_index=budget_index,
             budget=budget,
         )
-        corrections = [
-            {
-                "id": row["task_id"],
-                "input": row["input"],
-                "target": row["target"],
-            }
-            for row in related
-            if row["normalized_exact_match"] == 0
-        ][: int(probe.options.get("corrections", 1))]
-        if not corrections:
-            return
         after = before.with_name(before.name.replace("-before", "-after"))
         resource = self.algorithm.learn(
             before,
-            corrections,
+            [
+                {
+                    "id": correction_task.id,
+                    "input": correction_task.input,
+                    "target": correction_task.target,
+                }
+            ],
             after,
             budget=budget,
             seed=seed,
@@ -359,7 +484,7 @@ class Runner:
         self._evaluate(
             probe=probe,
             model=after,
-            tasks=data.control,
+            tasks=related,
             stage="after_related",
             seed=seed,
             budget_index=budget_index,
@@ -368,7 +493,7 @@ class Runner:
         self._evaluate(
             probe=probe,
             model=after,
-            tasks=data.stress,
+            tasks=unrelated,
             stage="after_unrelated",
             seed=seed,
             budget_index=budget_index,
@@ -430,9 +555,17 @@ class Runner:
             raise FileExistsError(f"output already exists: {self.output}")
         self.output.mkdir(parents=True)
         routed = self.route_tasks()
+        total = len(self.spec.budgets) * len(self.seeds) * len(self.probes)
+        completed = 0
         for budget_index, budget in enumerate(self.spec.budgets):
-            for seed in self.spec.seeds:
+            for seed in self.seeds:
                 for probe in self.probes:
+                    completed += 1
+                    started = time.perf_counter()
+                    print(
+                        f"[{completed}/{total}] seed={seed} probe={probe.id}",
+                        flush=True,
+                    )
                     if probe.protocol == "correction":
                         self._run_correction(
                             probe,
@@ -457,6 +590,11 @@ class Runner:
                             budget_index=budget_index,
                             budget=budget,
                         )
+                    print(
+                        f"[{completed}/{total}] completed in "
+                        f"{time.perf_counter() - started:.1f}s",
+                        flush=True,
+                    )
         return self.finish()
 
     def finish(self) -> Path:
@@ -469,7 +607,12 @@ class Runner:
                 if row["probe"] == probe.id and row["budget_index"] == largest_budget
             ]
             if probe.protocol == "correction":
-                summary = _correction_summary(selected)
+                summary = _correction_summary(
+                    selected,
+                    metric=probe.primary_metric,
+                    replicates=self.spec.bootstrap_replicates,
+                    seed=self.spec.bootstrap_seed,
+                )
             else:
                 bootstrap = (
                     paired_bootstrap
@@ -499,6 +642,7 @@ class Runner:
                 "property": probe.property,
                 "metric": probe.primary_metric,
                 **summary,
+                "optional_metrics": self._optional_summaries(probe, selected),
                 "status": status,
             }
             self.curves.extend(
@@ -533,6 +677,40 @@ class Runner:
         )
         return self.output
 
+    def _optional_summaries(
+        self, probe: Probe, rows: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        if probe.protocol == "correction":
+            control_stage, stress_stage = "before_related", "after_related"
+        else:
+            control_stage, stress_stage = "control", "stress"
+        bootstrap = (
+            paired_bootstrap
+            if probe.options.get("paired", True)
+            else unpaired_bootstrap
+        )
+        summaries: dict[str, Any] = {}
+        for metric in probe.optional_metrics:
+            actual = "capped_nll_bits" if metric == "nll_bits" else metric
+            summary = bootstrap(
+                [row for row in rows if row["stage"] == control_stage],
+                [row for row in rows if row["stage"] == stress_stage],
+                metric=actual,
+                replicates=self.spec.bootstrap_replicates,
+                seed=self.spec.bootstrap_seed,
+            )
+            if summary.get("groups", 0):
+                summaries[actual] = summary
+        if "nll_bits" in probe.optional_metrics:
+            summaries["zero_probability_rate"] = bootstrap(
+                [row for row in rows if row["stage"] == control_stage],
+                [row for row in rows if row["stage"] == stress_stage],
+                metric="target_probability_zero",
+                replicates=self.spec.bootstrap_replicates,
+                seed=self.spec.bootstrap_seed,
+            )
+        return summaries
+
     def _write_artifacts(
         self,
         probe_results: list[dict[str, Any]],
@@ -561,7 +739,9 @@ class Runner:
                 "run": self.spec.id,
                 "algorithm": self.algorithm.manifest,
                 "tasks": [str(path) for path in self.task_paths],
-                "seeds": list(self.spec.seeds),
+                "seeds": list(self.seeds),
+                "train_limit_override": self.train_limit,
+                "eval_limit_override": self.eval_limit,
                 "budgets": list(self.spec.budgets),
                 "calibrated": bool(self.calibration),
             },
@@ -595,52 +775,56 @@ def _with_input(task: Task, value: str) -> Task:
     )
 
 
-def _correction_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    cells: dict[tuple[str, str], list[float]] = defaultdict(list)
-    for row in rows:
-        cells[(row["stage"], row["probe_group_id"])].append(
-            row["normalized_exact_match"]
-        )
-    related_groups = sorted(
-        {group for stage, group in cells if stage == "before_related"}
-        & {group for stage, group in cells if stage == "after_related"}
+def _correction_summary(
+    rows: list[dict[str, Any]], *, metric: str, replicates: int, seed: int
+) -> dict[str, Any]:
+    related = paired_bootstrap(
+        [row for row in rows if row["stage"] == "before_related"],
+        [row for row in rows if row["stage"] == "after_related"],
+        metric=metric,
+        replicates=replicates,
+        seed=seed,
     )
-    unrelated_groups = sorted(
-        {group for stage, group in cells if stage == "before_unrelated"}
-        & {group for stage, group in cells if stage == "after_unrelated"}
-    )
-    if not related_groups:
+    if not related.get("groups", 0):
         return {"groups": 0}
-    before = sum(
-        sum(cells[("before_related", group)]) / len(cells[("before_related", group)])
-        for group in related_groups
-    ) / len(related_groups)
-    after = sum(
-        sum(cells[("after_related", group)]) / len(cells[("after_related", group)])
-        for group in related_groups
-    ) / len(related_groups)
-    damage = 0.0
-    if unrelated_groups:
-        damage = sum(
-            (
-                sum(cells[("before_unrelated", group)])
-                / len(cells[("before_unrelated", group)])
-            )
-            - (
-                sum(cells[("after_unrelated", group)])
-                / len(cells[("after_unrelated", group)])
-            )
-            for group in unrelated_groups
-        ) / len(unrelated_groups)
-    return {
-        "groups": len(related_groups),
-        "control": {"score": before, "ci95": [before, before]},
-        "stress": {"score": after, "ci95": [after, after]},
-        "gap": {"score": after - before, "ci95": [after - before, after - before]},
-        "retention": after / before if before > 0 else 0.0,
-        "related_gain": after - before,
-        "collateral_damage": damage,
-    }
+    unrelated = paired_bootstrap(
+        [row for row in rows if row["stage"] == "before_unrelated"],
+        [row for row in rows if row["stage"] == "after_unrelated"],
+        metric=metric,
+        replicates=replicates,
+        seed=seed,
+    )
+    direction = 1.0 if higher_is_better(metric) else -1.0
+    related["related_gain"] = direction * related["gap"]["score"]
+    related["related_gain_ci95"] = [
+        direction * item for item in related["gap"]["ci95"]
+    ][:: 1 if direction > 0 else -1]
+    if unrelated.get("groups", 0):
+        damage_direction = -direction
+        related["collateral_damage"] = damage_direction * unrelated["gap"]["score"]
+        related["collateral_damage_ci95"] = [
+            damage_direction * item for item in unrelated["gap"]["ci95"]
+        ][:: 1 if damage_direction > 0 else -1]
+    else:
+        related["collateral_damage"] = 0.0
+        related["collateral_damage_ci95"] = [0.0, 0.0]
+    return related
+
+
+def _seeded_rank(seed: int, value: str) -> bytes:
+    return hashlib.sha256(f"{seed}:{value}".encode()).digest()
+
+
+def _depth_distance(left: object, right: object) -> float:
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+        return abs(float(left) - float(right))
+    return math.inf
+
+
+def _task_field(task: Task, field: str) -> object:
+    if field.startswith("metadata."):
+        return task.metadata.get(field.removeprefix("metadata."))
+    return getattr(task, field)
 
 
 def _resource_fields(resource: dict[str, Any]) -> dict[str, Any]:

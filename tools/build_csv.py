@@ -61,6 +61,16 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("output", type=Path)
     result.add_argument("--variant", choices=["full", "oracle"], default="full")
     result.add_argument("--datasets", default="all")
+    result.add_argument(
+        "--configs",
+        default="all",
+        help="comma-separated output configs; default: all",
+    )
+    result.add_argument(
+        "--splits",
+        default="all",
+        help="comma-separated output splits; default: all",
+    )
     result.add_argument("--raw-dir", type=Path, default=PROJECT / ".data" / "raw")
     result.add_argument("--force-download", action="store_true")
     result.add_argument("--mrcr-needles", default="2needle,4needle,8needle")
@@ -71,6 +81,8 @@ def parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = parser().parse_args()
     names = DATASETS if args.datasets == "all" else comma_values(args.datasets)
+    configs = None if args.configs == "all" else set(comma_values(args.configs))
+    splits = None if args.splits == "all" else set(comma_values(args.splits))
     unknown = sorted(set(names) - set(DATASETS))
     if unknown:
         raise ValueError(f"unknown datasets: {', '.join(unknown)}")
@@ -99,7 +111,19 @@ def main() -> int:
                 babilong_lengths=babilong_lengths,
             )
             for source in sources:
+                if splits is not None and source.split not in splits:
+                    continue
+                if (
+                    configs is not None
+                    and source.config != "row_config"
+                    and source.config not in configs
+                ):
+                    continue
                 for task in rows(source, args.variant):
+                    if configs is not None and task.config not in configs:
+                        continue
+                    if splits is not None and task.split not in splits:
+                        continue
                     writer.writerow(task.to_csv_dict())
                     count += 1
             total += count

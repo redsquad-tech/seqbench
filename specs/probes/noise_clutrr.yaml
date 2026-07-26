@@ -4,18 +4,17 @@ version: 1
 protocol: training_contrast
 requires: [learn, generate]
 train:
-  select: {dataset: clutrr, split: train, variant: full}
+  select: {dataset: clutrr, config: gen_train23_test2to10, split: train, variant: full}
 control:
-  select: {dataset: clutrr, split: test, variant: full}
+  select: {dataset: clutrr, config: gen_train23_test2to10, split: test, variant: full}
 stress:
-  select: {dataset: clutrr, split: test, variant: full}
+  select: {dataset: clutrr, config: gen_train23_test2to10, split: test, variant: full}
 pair_by: probe_group_id
 metrics:
   primary: normalized_exact_match
   optional: [candidate_accuracy, nll_bits]
 difficulty_axes: [reasoning_depth]
 options:
-  stress_train: {dataset: clutrr, split: train, variant: noise_20}
+  stress_train: {dataset: clutrr, config: gen_train23_test2to10, split: train, variant: noise_20}
   train_limit: 10000
   eval_limit: 2000
-

@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from .calibration import write_calibration
+from .compare import compare_runs
 from .runner import Runner
 from .tasks import iter_tasks
 
@@ -17,6 +18,9 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--algorithm", required=True, type=Path)
     run.add_argument("--tasks", action="append", required=True, type=Path)
     run.add_argument("--output", required=True, type=Path)
+    run.add_argument("--seed", action="append", type=int)
+    run.add_argument("--train-limit", type=int)
+    run.add_argument("--eval-limit", type=int)
     validate = commands.add_parser("validate-csv", help="stream and validate task CSV")
     validate.add_argument("tasks", nargs="+", type=Path)
     calibrate = commands.add_parser(
@@ -25,6 +29,16 @@ def parser() -> argparse.ArgumentParser:
     calibrate.add_argument("--weak", action="append", required=True, type=Path)
     calibrate.add_argument("--strong", action="append", required=True, type=Path)
     calibrate.add_argument("--output", required=True, type=Path)
+    compare = commands.add_parser("compare", help="compare completed algorithm runs")
+    compare.add_argument("spec", type=Path)
+    compare.add_argument(
+        "--run",
+        action="append",
+        required=True,
+        help="LABEL=RUN_DIRECTORY; repeat for seeds and algorithms",
+    )
+    compare.add_argument("--reference", required=True)
+    compare.add_argument("--output", required=True, type=Path)
     return root
 
 
@@ -36,6 +50,9 @@ def main(argv: list[str] | None = None) -> int:
             algorithm_spec=args.algorithm,
             task_paths=args.tasks,
             output=args.output,
+            seeds=tuple(args.seed) if args.seed else None,
+            train_limit=args.train_limit,
+            eval_limit=args.eval_limit,
         ).run()
         print(output / "report.md")
         return 0
@@ -52,6 +69,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "calibrate":
         write_calibration(args.output, args.weak, args.strong)
         print(args.output)
+        return 0
+    if args.command == "compare":
+        labelled: dict[str, list[Path]] = {}
+        for item in args.run:
+            if "=" not in item:
+                raise ValueError("--run must be LABEL=RUN_DIRECTORY")
+            label, raw_path = item.split("=", 1)
+            labelled.setdefault(label, []).append(Path(raw_path))
+        output = compare_runs(
+            spec_path=args.spec,
+            labelled_runs=labelled,
+            reference=args.reference,
+            output=args.output,
+        )
+        print(output / "comparison.md")
         return 0
     raise AssertionError(args.command)
 

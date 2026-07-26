@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from datasets.transforms import noise_transform, nonce_transform
+from datasets.transforms import (
+    counterfactual_transform,
+    noise_transform,
+    nonce_transform,
+)
 
 from seqbench.schema import Task
 
@@ -38,3 +42,21 @@ def test_noise_levels_are_nested() -> None:
     applied = [row.metadata["noise_rate"] for row in rows if row.metadata["noise_applied"]]
     assert applied == sorted(applied)
     assert len(rows) == 4
+
+
+def test_counterfactual_keeps_probe_group_and_reverses_relation() -> None:
+    source = task(
+        input=(
+            "Story:\nAlice is Bob's mother.\n\n"
+            "Question:\nWhat is the relation of Alice to Bob?\n\nAnswer:"
+        ),
+        candidates=("mother", "son"),
+        metadata={
+            "query": ["Bob", "Alice"],
+            "genders": "Alice:female,Bob:male",
+        },
+    )
+    transformed = next(iter(counterfactual_transform(source)))
+    assert transformed.probe_group_id == source.probe_group_id
+    assert transformed.target == "son"
+    assert "relation of Bob to Alice" in transformed.input

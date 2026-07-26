@@ -64,6 +64,7 @@ def enrich_prediction(row: dict[str, Any]) -> dict[str, Any]:
     result["nll_bits"] = (
         math.inf if log_probability is None else -float(log_probability) / math.log(2)
     )
+    result["target_probability_zero"] = float(log_probability is None)
     result["capped_nll_bits"] = min(result["nll_bits"], 1024.0)
     candidates = row.get("candidate_log_probabilities", {})
     result["candidate_accuracy"] = None
@@ -96,23 +97,46 @@ HIGHER_IS_BETTER = {
     "mrr": True,
     "valid_structure_rate": True,
     "nll_bits": False,
+    "capped_nll_bits": False,
     "candidate_nll_bits": False,
+    "target_probability_zero": False,
 }
+
+
+def higher_is_better(metric: str) -> bool:
+    return HIGHER_IS_BETTER.get(metric, True)
 
 
 def _mean(values: list[float]) -> float:
     return sum(values) / len(values)
 
 
-def _group_scores(
+def _seed_group_scores(
     rows: list[dict[str, Any]], metric: str
-) -> dict[str, float]:
-    grouped: dict[str, list[float]] = defaultdict(list)
+) -> dict[int, dict[str, float]]:
+    grouped: dict[tuple[int, str], list[float]] = defaultdict(list)
     for row in rows:
         value = row.get(metric)
         if isinstance(value, (int, float)) and math.isfinite(float(value)):
-            grouped[row["probe_group_id"]].append(float(value))
-    return {group: _mean(values) for group, values in grouped.items()}
+            grouped[(int(row.get("seed", 0)), row["probe_group_id"])].append(float(value))
+    result: dict[int, dict[str, float]] = defaultdict(dict)
+    for (seed, group), values in grouped.items():
+        result[seed][group] = _mean(values)
+    return dict(result)
+
+
+def _interval(samples: list[tuple[float, float, float]], index: int) -> list[float]:
+    values = sorted(sample[index] for sample in samples)
+    return [
+        values[int(0.025 * (len(values) - 1))],
+        values[int(0.975 * (len(values) - 1))],
+    ]
+
+
+def _retention(metric: str, control: float, stress: float) -> float:
+    if higher_is_better(metric):
+        return stress / control if control > 0 else 0.0
+    return 2 ** (-(stress - control))
 
 
 def paired_bootstrap(
@@ -123,45 +147,50 @@ def paired_bootstrap(
     replicates: int,
     seed: int,
 ) -> dict[str, Any]:
-    control = _group_scores(control_rows, metric)
-    stress = _group_scores(stress_rows, metric)
-    groups = sorted(set(control) & set(stress))
-    if not groups:
+    control = _seed_group_scores(control_rows, metric)
+    stress = _seed_group_scores(stress_rows, metric)
+    seeds = sorted(set(control) & set(stress))
+    common = {
+        seed: sorted(set(control[seed]) & set(stress[seed])) for seed in seeds
+    }
+    seeds = [seed for seed in seeds if common[seed]]
+    if not seeds:
         return {"groups": 0}
-    control_values = [control[group] for group in groups]
-    stress_values = [stress[group] for group in groups]
-    gaps = [right - left for left, right in zip(control_values, stress_values, strict=True)]
+    control_by_seed = [
+        _mean([control[seed][group] for group in common[seed]]) for seed in seeds
+    ]
+    stress_by_seed = [
+        _mean([stress[seed][group] for group in common[seed]]) for seed in seeds
+    ]
     rng = random.Random(seed)
     samples: list[tuple[float, float, float]] = []
     for _ in range(replicates):
-        indices = [rng.randrange(len(groups)) for _ in groups]
-        samples.append(
-            (
-                _mean([control_values[index] for index in indices]),
-                _mean([stress_values[index] for index in indices]),
-                _mean([gaps[index] for index in indices]),
+        sampled_seeds = [seeds[rng.randrange(len(seeds))] for _ in seeds]
+        left_seed: list[float] = []
+        right_seed: list[float] = []
+        for sampled_seed in sampled_seeds:
+            groups = common[sampled_seed]
+            sampled_groups = [groups[rng.randrange(len(groups))] for _ in groups]
+            left_seed.append(
+                _mean([control[sampled_seed][group] for group in sampled_groups])
             )
-        )
+            right_seed.append(
+                _mean([stress[sampled_seed][group] for group in sampled_groups])
+            )
+        left = _mean(left_seed)
+        right = _mean(right_seed)
+        samples.append((left, right, right - left))
 
-    def interval(index: int) -> list[float]:
-        values = sorted(sample[index] for sample in samples)
-        low = values[int(0.025 * (len(values) - 1))]
-        high = values[int(0.975 * (len(values) - 1))]
-        return [low, high]
-
-    control_mean = _mean(control_values)
-    stress_mean = _mean(stress_values)
+    control_mean = _mean(control_by_seed)
+    stress_mean = _mean(stress_by_seed)
     gap = stress_mean - control_mean
-    if HIGHER_IS_BETTER.get(metric, True):
-        retention = stress_mean / control_mean if control_mean > 0 else 0.0
-    else:
-        retention = 2 ** (-gap)
     return {
-        "groups": len(groups),
-        "control": {"score": control_mean, "ci95": interval(0)},
-        "stress": {"score": stress_mean, "ci95": interval(1)},
-        "gap": {"score": gap, "ci95": interval(2)},
-        "retention": retention,
+        "groups": sum(len(common[item]) for item in seeds),
+        "seeds": len(seeds),
+        "control": {"score": control_mean, "ci95": _interval(samples, 0)},
+        "stress": {"score": stress_mean, "ci95": _interval(samples, 1)},
+        "gap": {"score": gap, "ci95": _interval(samples, 2)},
+        "retention": _retention(metric, control_mean, stress_mean),
     }
 
 
@@ -173,39 +202,47 @@ def unpaired_bootstrap(
     replicates: int,
     seed: int,
 ) -> dict[str, Any]:
-    control = list(_group_scores(control_rows, metric).values())
-    stress = list(_group_scores(stress_rows, metric).values())
-    if not control or not stress:
+    control = _seed_group_scores(control_rows, metric)
+    stress = _seed_group_scores(stress_rows, metric)
+    seeds = sorted(set(control) & set(stress))
+    seeds = [seed for seed in seeds if control[seed] and stress[seed]]
+    if not seeds:
         return {"groups": 0}
     rng = random.Random(seed)
     samples: list[tuple[float, float, float]] = []
     for _ in range(replicates):
-        left = _mean([control[rng.randrange(len(control))] for _ in control])
-        right = _mean([stress[rng.randrange(len(stress))] for _ in stress])
+        sampled_seeds = [seeds[rng.randrange(len(seeds))] for _ in seeds]
+        left_seed: list[float] = []
+        right_seed: list[float] = []
+        for sampled_seed in sampled_seeds:
+            left_values = list(control[sampled_seed].values())
+            right_values = list(stress[sampled_seed].values())
+            left_seed.append(
+                _mean([left_values[rng.randrange(len(left_values))] for _ in left_values])
+            )
+            right_seed.append(
+                _mean(
+                    [right_values[rng.randrange(len(right_values))] for _ in right_values]
+                )
+            )
+        left = _mean(left_seed)
+        right = _mean(right_seed)
         samples.append((left, right, right - left))
-
-    def interval(index: int) -> list[float]:
-        values = sorted(sample[index] for sample in samples)
-        return [
-            values[int(0.025 * (len(values) - 1))],
-            values[int(0.975 * (len(values) - 1))],
-        ]
-
-    control_mean = _mean(control)
-    stress_mean = _mean(stress)
+    control_mean = _mean([_mean(list(control[item].values())) for item in seeds])
+    stress_mean = _mean([_mean(list(stress[item].values())) for item in seeds])
     gap = stress_mean - control_mean
-    if HIGHER_IS_BETTER.get(metric, True):
-        retention = stress_mean / control_mean if control_mean > 0 else 0.0
-    else:
-        retention = 2 ** (-gap)
     return {
-        "groups": min(len(control), len(stress)),
-        "control_examples": len(control),
-        "stress_examples": len(stress),
-        "control": {"score": control_mean, "ci95": interval(0)},
-        "stress": {"score": stress_mean, "ci95": interval(1)},
-        "gap": {"score": gap, "ci95": interval(2)},
-        "retention": retention,
+        "groups": min(
+            sum(len(control[item]) for item in seeds),
+            sum(len(stress[item]) for item in seeds),
+        ),
+        "seeds": len(seeds),
+        "control_examples": sum(len(control[item]) for item in seeds),
+        "stress_examples": sum(len(stress[item]) for item in seeds),
+        "control": {"score": control_mean, "ci95": _interval(samples, 0)},
+        "stress": {"score": stress_mean, "ci95": _interval(samples, 1)},
+        "gap": {"score": gap, "ci95": _interval(samples, 2)},
+        "retention": _retention(metric, control_mean, stress_mean),
     }
 
 
@@ -214,15 +251,16 @@ def difficulty_curves(
 ) -> list[dict[str, Any]]:
     curves: list[dict[str, Any]] = []
     for axis in axes:
-        cells: dict[str, list[float]] = defaultdict(list)
+        cells: dict[tuple[str, str], list[float]] = defaultdict(list)
         for row in rows:
             value = row.get(metric)
             difficulty = row.get("metadata", {}).get(axis)
             if difficulty is not None and isinstance(value, (int, float)):
-                cells[str(difficulty)].append(float(value))
-        for difficulty, values in sorted(cells.items()):
+                cells[(str(row["stage"]), str(difficulty))].append(float(value))
+        for (stage, difficulty), values in sorted(cells.items()):
             curves.append(
                 {
+                    "stage": stage,
                     "axis": axis,
                     "difficulty": difficulty,
                     "metric": metric,

@@ -4,11 +4,11 @@ version: 1
 protocol: fixed
 requires: [generate]
 train:
-  select: {dataset: recogs, split: train, variant: full}
+  select: {dataset: recogs, config: recogs_v2, split: train, variant: full}
 control:
-  select: {dataset: recogs, split: test, variant: full}
+  select: {dataset: recogs, config: recogs_v2, split: test, variant: full}
 stress:
-  select: {dataset: recogs, split: generalization, variant: full}
+  select: {dataset: recogs, config: recogs_v2, split: generalization, variant: full}
 pair_by: source_example_id
 metrics:
   primary: normalized_exact_match

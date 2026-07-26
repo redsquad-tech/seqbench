@@ -194,7 +194,8 @@ class Algorithm:
             before = checkpoint_hash(model)
             timeout = max(
                 1.0,
-                float(budget["infer_wall_seconds_per_example"]) * len(requests),
+                float(budget["infer_wall_seconds_per_example"])
+                * len({request["input"] for request in requests}),
             )
             result = run_measured(
                 [

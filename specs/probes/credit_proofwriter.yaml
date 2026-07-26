@@ -4,18 +4,18 @@ version: 1
 protocol: training_contrast
 requires: [learn, generate]
 train:
-  select: {dataset: proofwriter, split: train, variant: full}
+  select: {dataset: proofwriter, config: depth-5, split: train, variant: full}
 control:
-  select: {dataset: proofwriter, split: test, variant: full}
+  select: {dataset: proofwriter, config: depth-5, split: test, variant: full}
 stress:
-  select: {dataset: proofwriter, split: test, variant: full}
+  select: {dataset: proofwriter, config: depth-5, split: test, variant: full}
 pair_by: probe_group_id
 metrics:
   primary: normalized_exact_match
   optional: [candidate_accuracy, nll_bits]
 difficulty_axes: [reasoning_depth]
 options:
-  stress_train: {dataset: proofwriter, split: train, variant: proof_supervised}
+  stress_train: {dataset: proofwriter, config: depth-5, split: train, variant: proof_supervised}
+  train_limit_by: probe_group_id
   train_limit: 10000
   eval_limit: 2000
-
