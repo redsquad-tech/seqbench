@@ -9,7 +9,7 @@ import pyarrow.parquet as pq
 
 from seqbench.compare import compare_runs
 from seqbench.process import Algorithm, checkpoint_hash
-from seqbench.runner import Runner, _correction_summary
+from seqbench.runner import ProbeData, Runner, _correction_summary, _stress_training_tasks
 from seqbench.schema import Task
 from seqbench.screen import screen_runs
 
@@ -159,6 +159,29 @@ def test_identical_training_is_reused_within_run(tmp_path: Path) -> None:
     )
     assert checkpoint_hash(first) == checkpoint_hash(second)
     assert runner.resources[-1]["cached"] is True
+
+
+def test_training_contrast_augment_includes_base_and_auxiliary_rows(tmp_path: Path) -> None:
+    runner = Runner(
+        run_spec=ROOT / "specs/runs/smoke.yaml",
+        algorithm_spec=ROOT / "tests/fixtures/adapter/algorithm.yaml",
+        task_paths=[ROOT / "tests/fixtures/data/tasks.csv"],
+        output=tmp_path / "unused",
+    )
+    probe = runner.probes[0]
+    routed = runner.route_tasks()[probe.id]
+    data = ProbeData(
+        train=routed.train[:1],
+        stress_train=routed.control[:1],
+        control=[],
+        stress=[],
+    )
+    augmented = replace(
+        probe,
+        options={**probe.options, "stress_train_mode": "augment"},
+    )
+    assert _stress_training_tasks(augmented, data) == [*data.train, *data.stress_train]
+    assert _stress_training_tasks(probe, data) == data.stress_train
 
 
 def test_compare_aggregates_black_box_runs(tmp_path: Path) -> None:

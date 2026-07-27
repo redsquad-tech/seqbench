@@ -689,6 +689,7 @@ class Runner:
         stress_model = (
             self.output / "checkpoints" / (f"{probe.id}-budget{budget_index}-seed{seed}-stress")
         )
+        stress_training = _stress_training_tasks(probe, data)
         self._learn(
             probe=probe,
             tasks=data.train,
@@ -700,7 +701,7 @@ class Runner:
         )
         self._learn(
             probe=probe,
-            tasks=data.stress_train,
+            tasks=stress_training,
             seed=seed,
             budget=budget,
             destination=stress_model,
@@ -725,7 +726,7 @@ class Runner:
             seed=seed,
             budget_index=budget_index,
             budget=budget,
-            train_values=_training_values(data.stress_train),
+            train_values=_training_values(stress_training),
         )
 
     def run(self) -> Path:
@@ -1085,6 +1086,12 @@ def _annotate_counterfactual_consistency(
         )
     for row in control_rows:
         row["counterfactual_consistency"] = row["normalized_exact_match"]
+
+
+def _stress_training_tasks(probe: Probe, data: ProbeData) -> list[Task]:
+    if probe.options.get("stress_train_mode") == "augment":
+        return [*data.train, *data.stress_train]
+    return data.stress_train
 
 
 def _training_fingerprint(tasks: list[Task], *, seed: int, budget: dict[str, Any]) -> str:
