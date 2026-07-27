@@ -197,7 +197,7 @@ class Algorithm:
             budget_path.write_text(json.dumps(budget), encoding="utf-8")
             before = checkpoint_hash(model)
             timeout = max(
-                1.0,
+                5.0,
                 float(budget["infer_wall_seconds_per_example"])
                 * len({request["input"] for request in requests}),
             )

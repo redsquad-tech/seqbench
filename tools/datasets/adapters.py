@@ -136,6 +136,19 @@ class MRCRAdapter(Adapter):
         answer = clean_text(first_present(row, "answer", "target", "expected_output"))
         prompt = serialize_messages(first_present(row, "prompt", "messages", "input"))
         source_id = clean_text(first_present(row, "id", "sample_id", default=source_index))
+        desired_index = row.get("desired_msg_index")
+        total_messages = row.get("total_messages")
+        relative_position = None
+        position_bucket = None
+        if isinstance(desired_index, int) and isinstance(total_messages, int):
+            relative_position = desired_index / max(total_messages - 1, 1)
+            position_bucket = (
+                "start"
+                if relative_position < 1 / 3
+                else "middle"
+                if relative_position < 2 / 3
+                else "end"
+            )
         metadata = {
             "source_id": source_id,
             "source_key": source_key,
@@ -143,11 +156,12 @@ class MRCRAdapter(Adapter):
             "date_added": clean_text(row.get("date_added")),
             "needle_config": config,
             "n_needles": row.get("n_needles"),
-            "desired_msg_index": row.get("desired_msg_index"),
-            "total_messages": row.get("total_messages"),
+            "desired_msg_index": desired_index,
+            "total_messages": total_messages,
+            "relative_target_position": relative_position,
+            "position_bucket": position_bucket,
             "n_chars": row.get("n_chars"),
         }
-        total_messages = row.get("total_messages")
         n_needles = row.get("n_needles")
         distractors = None
         if isinstance(total_messages, int) and isinstance(n_needles, int):

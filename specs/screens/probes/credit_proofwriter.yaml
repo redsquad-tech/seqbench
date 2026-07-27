@@ -1,0 +1,30 @@
+id: screen.credit.proofwriter
+property: credit_assignment
+version: 1
+protocol: training_contrast
+requires: [learn, generate]
+train:
+  select: {dataset: proofwriter, config: depth-5, split: train, variant: full}
+control:
+  select: {dataset: proofwriter, config: depth-5, split: test, variant: full}
+stress:
+  select: {dataset: proofwriter, config: depth-5, split: test, variant: full}
+pair_by: probe_group_id
+metrics:
+  primary: normalized_exact_match
+  optional: [candidate_accuracy, nll_bits]
+difficulty_axes: [reasoning_depth]
+options:
+  stress_train:
+    dataset: proofwriter
+    config: depth-5
+    split: train
+    variant: credit_supervised
+    metadata.supervision_role: auxiliary_proof
+  stress_train_mode: augment
+  stress_train_limit: 2500
+  train_limit: 10000
+  eval_limit: 72
+  train_sampling_namespace: proofwriter.base
+  eval_stratify_by: [target, metadata.reasoning_depth]
+  eval_stratify_all: true

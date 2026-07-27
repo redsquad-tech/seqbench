@@ -262,13 +262,15 @@ class Runner:
         budget_index: int,
         budget: dict[str, Any],
         train_values: set[str] | None = None,
+        task_stages: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
         requests: list[dict[str, Any]] = []
         request_map: dict[str, tuple[Task, str, str | None]] = {}
         can_generate = self.algorithm.manifest["capabilities"]["generate"]
         can_score = self.algorithm.manifest["capabilities"]["score"]
         for task in tasks:
-            prefix = f"{probe.id}:{budget_index}:{seed}:{stage}:{task.id}"
+            task_stage = task_stages.get(task.id, stage) if task_stages is not None else stage
+            prefix = f"{probe.id}:{budget_index}:{seed}:{task_stage}:{task.id}"
             if can_generate:
                 request_id = f"{prefix}:generate"
                 requests.append(
@@ -350,6 +352,7 @@ class Runner:
                     "output_seen_in_train": None,
                 },
             )
+            row["stage"] = task_stages.get(task.id, stage) if task_stages is not None else stage
             if kind == "generate":
                 row["output"] = response["output"]
                 row["output_seen_in_train"] = (
@@ -455,6 +458,17 @@ class Runner:
             budget_index=budget_index,
         )
         train_values = _training_values(data.train)
+        if probe.options.get("paired_related"):
+            self._run_paired_correction(
+                probe,
+                data,
+                before=before,
+                train_values=train_values,
+                seed=seed,
+                budget_index=budget_index,
+                budget=budget,
+            )
+            return
         minimum_related = int(probe.options.get("minimum_related", 5))
         correction_task = next(
             (
@@ -553,6 +567,112 @@ class Runner:
             budget=budget,
             train_values=train_values | {normalize_text(correction_task.target)},
         )
+
+    def _run_paired_correction(
+        self,
+        probe: Probe,
+        data: ProbeData,
+        *,
+        before: Path,
+        train_values: set[str],
+        seed: int,
+        budget_index: int,
+        budget: dict[str, Any],
+    ) -> None:
+        stress = {task.probe_group_id: task for task in data.stress}
+        candidates = [
+            task
+            for task in sorted(
+                data.control,
+                key=lambda item: _seeded_rank(self.spec.sampling_seed, item.id),
+            )
+            if task.probe_group_id in stress
+        ][: int(probe.options.get("correction_episodes", 6))]
+        used_unrelated: set[str] = set()
+        episodes: list[tuple[Task, Task, Task]] = []
+        for episode, correction_task in enumerate(candidates):
+            related = stress[correction_task.probe_group_id]
+            unrelated = next(
+                (
+                    task
+                    for task in sorted(
+                        data.control,
+                        key=lambda item: (
+                            _depth_distance(
+                                correction_task.metadata.get("reasoning_depth"),
+                                item.metadata.get("reasoning_depth"),
+                            ),
+                            _seeded_rank(self.spec.sampling_seed + episode, item.id),
+                        ),
+                    )
+                    if task.probe_group_id != correction_task.probe_group_id
+                    and task.probe_group_id not in used_unrelated
+                ),
+                None,
+            )
+            if unrelated is None:
+                continue
+            used_unrelated.add(unrelated.probe_group_id)
+            episodes.append((correction_task, related, unrelated))
+        before_tasks = [task for _, related, unrelated in episodes for task in (related, unrelated)]
+        self._evaluate(
+            probe=probe,
+            model=before,
+            tasks=before_tasks,
+            stage="before_correction",
+            seed=seed,
+            budget_index=budget_index,
+            budget=budget,
+            train_values=train_values,
+            task_stages={
+                task.id: stage
+                for _, related, unrelated in episodes
+                for task, stage in (
+                    (related, "before_related"),
+                    (unrelated, "before_unrelated"),
+                )
+            },
+        )
+        for episode, (correction_task, related, unrelated) in enumerate(episodes):
+            after = before.with_name(f"{before.name}-episode{episode}-after")
+            resource = self.algorithm.learn(
+                before,
+                [
+                    {
+                        "id": correction_task.id,
+                        "input": correction_task.input,
+                        "target": correction_task.target,
+                    }
+                ],
+                after,
+                budget=budget,
+                seed=seed,
+            )
+            self.resources.append(
+                {
+                    "probe": probe.id,
+                    "seed": seed,
+                    "budget_index": budget_index,
+                    "phase": f"correction_{episode}",
+                    "operation": "learn",
+                    **_resource_fields(resource),
+                }
+            )
+            updated_values = train_values | {normalize_text(correction_task.target)}
+            self._evaluate(
+                probe=probe,
+                model=after,
+                tasks=[related, unrelated],
+                stage="after_correction",
+                seed=seed,
+                budget_index=budget_index,
+                budget=budget,
+                train_values=updated_values,
+                task_stages={
+                    related.id: "after_related",
+                    unrelated.id: "after_unrelated",
+                },
+            )
 
     def _run_training_contrast(
         self,

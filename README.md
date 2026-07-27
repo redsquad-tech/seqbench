@@ -137,6 +137,32 @@ The corrected causal protocol is immutable and versioned separately:
 It performs stable hash sampling after control/stress pairing, records the
 selected IDs, and uses an independent `sampling_seed`.
 
+## Fast hypothesis screen
+
+Prepare the fixed compact cohort once:
+
+```bash
+./prepare_screen_v1.sh
+```
+
+Run an algorithm normally, then compare one or more completed seed runs with a
+saved exact-kNN run:
+
+```bash
+.venv/bin/seqbench screen specs/screens/screen_v1.yaml \
+  --candidate runs/candidate/seed-0 \
+  --baseline runs/exact-knn \
+  --output runs/candidate/screen
+```
+
+The screen covers prediction, retrieval, position/length transfer, binding,
+multi-hop reasoning, composition, auxiliary proof supervision, noise,
+one-example correction, and checkpoint efficiency. A single stochastic seed
+can return `PROMOTE` or `INCONCLUSIVE`; `DROP` requires three candidate seeds.
+`PROMOTE` means that the paired 95% interval still permits an improvement over
+exact kNN on at least one metric; it is deliberately a permissive discovery
+gate, not evidence that the improvement is already established.
+
 The runner reads the CSV files once, routes rows through declarative YAML
 selectors, enforces budgets, checks that inference did not mutate checkpoints,
 and writes:

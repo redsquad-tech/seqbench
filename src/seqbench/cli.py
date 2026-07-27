@@ -7,6 +7,7 @@ from pathlib import Path
 from .calibration import write_calibration
 from .compare import compare_runs
 from .runner import Runner
+from .screen import screen_runs
 from .tasks import iter_tasks
 
 
@@ -39,6 +40,11 @@ def parser() -> argparse.ArgumentParser:
     )
     compare.add_argument("--reference", required=True)
     compare.add_argument("--output", required=True, type=Path)
+    screen = commands.add_parser("screen", help="screen completed candidate runs against exact kNN")
+    screen.add_argument("spec", type=Path)
+    screen.add_argument("--candidate", action="append", required=True, type=Path)
+    screen.add_argument("--baseline", action="append", required=True, type=Path)
+    screen.add_argument("--output", required=True, type=Path)
     return root
 
 
@@ -84,6 +90,15 @@ def main(argv: list[str] | None = None) -> int:
             output=args.output,
         )
         print(output / "comparison.md")
+        return 0
+    if args.command == "screen":
+        output = screen_runs(
+            spec_path=args.spec,
+            candidate_runs=args.candidate,
+            baseline_runs=args.baseline,
+            output=args.output,
+        )
+        print(output / "report.md")
         return 0
     raise AssertionError(args.command)
 

@@ -1,0 +1,6 @@
+id: composition
+version: 1
+required_probes:
+  - screen.composition.recogs
+  - screen.composition.slog
+aggregation: all_required

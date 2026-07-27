@@ -1,0 +1,6 @@
+id: noise_robustness
+version: 1
+required_probes:
+  - screen.noise.clutrr
+  - screen.noise.rare_exceptions
+aggregation: all_required

@@ -1,0 +1,22 @@
+id: screen.binding.counterfactual
+property: role_binding
+version: 1
+protocol: fixed
+requires: [generate]
+train:
+  select: {dataset: clutrr, config: gen_train23_test2to10, split: train, variant: full}
+control:
+  select: {dataset: clutrr, config: gen_train23_test2to10, split: test, variant: nonce}
+stress:
+  select: {dataset: clutrr, config: gen_train23_test2to10, split: test, variant: nonce_counterfactual}
+pair_by: probe_group_id
+metrics:
+  primary: counterfactual_consistency
+  optional: [normalized_exact_match, candidate_accuracy, nll_bits]
+difficulty_axes: [reasoning_depth]
+options:
+  train_limit: 10000
+  eval_limit: 72
+  train_sampling_namespace: clutrr.base
+  eval_stratify_by: metadata.reasoning_depth
+  eval_stratify_all: true

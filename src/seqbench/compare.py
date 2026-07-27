@@ -112,7 +112,9 @@ def compare_runs(
                         "related_gain": summary.get("related_gain"),
                         "collateral_damage": summary.get("collateral_damage"),
                         "delta_control_vs_reference": _gap(delta_control),
+                        "delta_control_vs_reference_ci95": _gap_ci(delta_control),
                         "delta_stress_vs_reference": _gap(delta_stress),
+                        "delta_stress_vs_reference_ci95": _gap_ci(delta_stress),
                         "seeds": summary.get("seeds", 0),
                         "groups": summary["groups"],
                     }
@@ -253,6 +255,10 @@ def _stages(protocol: str) -> tuple[str, str]:
 
 def _gap(summary: dict[str, Any]) -> float | None:
     return float(summary["gap"]["score"]) if summary.get("groups", 0) else None
+
+
+def _gap_ci(summary: dict[str, Any]) -> list[float] | None:
+    return [float(item) for item in summary["gap"]["ci95"]] if summary.get("groups", 0) else None
 
 
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:

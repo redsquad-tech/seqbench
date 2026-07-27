@@ -1,0 +1,23 @@
+id: screen.reasoning.proofwriter
+property: multi_hop
+version: 1
+protocol: fixed
+requires: [generate]
+train:
+  select: {dataset: proofwriter, config: depth-5, split: train, variant: full}
+control:
+  select: {dataset: proofwriter, config: depth-5, split: test, variant: full, metadata.reasoning_depth: {lte: 1}}
+stress:
+  select: {dataset: proofwriter, config: depth-5, split: test, variant: full, metadata.reasoning_depth: {gte: 3}}
+pair_by: probe_group_id
+metrics:
+  primary: normalized_exact_match
+  optional: [candidate_accuracy, nll_bits]
+difficulty_axes: [reasoning_depth]
+options:
+  train_limit: 10000
+  eval_limit: 72
+  paired: false
+  train_sampling_namespace: proofwriter.base
+  eval_stratify_by: [target, metadata.reasoning_depth]
+  eval_stratify_all: true

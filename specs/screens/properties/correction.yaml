@@ -1,0 +1,4 @@
+id: online_correction
+version: 1
+required_probes: [screen.correction.clutrr]
+aggregation: all_required

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import csv
+import hashlib
 import random
 import re
 import sys
@@ -173,6 +174,42 @@ def noise_transform(seed: int) -> Callable[[Task], Iterator[Task]]:
     return transform
 
 
+def rare_exception_transform(seed: int) -> Callable[[Task], Iterator[Task]]:
+    def transform(task: Task) -> Iterator[Task]:
+        if task.dataset != "clutrr" or task.variant != "full" or not task.candidates:
+            return
+        digest = hashlib.sha256(f"{seed}:{task.probe_group_id}".encode()).digest()
+        exception = int.from_bytes(digest[:8], "big") % 20 == 0
+        if task.split == "test" and not exception:
+            return
+        target = task.target
+        value = task.input
+        variant = "rare_exception_train_05"
+        if exception:
+            index = task.candidates.index(task.target)
+            target = task.candidates[(index + 1) % len(task.candidates)]
+            value = (
+                "Exception convention is active: use the learned alternate "
+                f"relation code.\n\n{task.input}"
+            )
+            if task.split == "test":
+                variant = "rare_exception_test"
+        yield derived(
+            task,
+            variant,
+            input=value,
+            target=target,
+            acceptable_outputs=(target,),
+            metadata={
+                **task.metadata,
+                "rare_exception": exception,
+                "clean_expected_output": task.target,
+            },
+        )
+
+    return transform
+
+
 def supervision_transform(task: Task) -> Iterator[Task]:
     if task.dataset != "proofwriter" or task.split != "train":
         return
@@ -185,6 +222,35 @@ def supervision_transform(task: Task) -> Iterator[Task]:
         input=f"{task.input}\n\nTraining-only proof:\n{proof}",
         metadata={**task.metadata, "supervision_role": "privileged_proof_context"},
     )
+
+
+def credit_supervision_transform(task: Task) -> Iterator[Task]:
+    """Create the auxiliary proof target added to the ordinary training stream."""
+    if task.dataset != "proofwriter" or task.split != "train":
+        return
+    proof = _target_proof(task)
+    if not proof:
+        return
+    yield replace(
+        task,
+        id=f"{task.probe_group_id}:credit_supervised:proof",
+        variant="credit_supervised",
+        input=f"{task.input}\n\nProduce a valid proof:",
+        target=str(proof),
+        acceptable_outputs=(str(proof),),
+        candidates=(),
+        metadata={**task.metadata, "supervision_role": "auxiliary_proof"},
+    )
+
+
+def correction_paraphrase_transform(task: Task) -> Iterator[Task]:
+    if task.dataset != "clutrr" or task.split != "test" or task.variant != "full":
+        return
+    value = task.input.replace(
+        "What is the relation of ",
+        "State the kinship relation of ",
+    )
+    yield derived(task, "correction_related", input=value)
 
 
 def _literal(value: object) -> object:
@@ -239,3 +305,55 @@ def _inverse_relation(relation: str, gender: str) -> str | None:
     if values is None or gender not in {"male", "female"}:
         return None
     return values[0] if gender == "male" else values[1]
+
+
+def _target_proof(task: Task) -> str | None:
+    proofs = task.metadata.get("proof")
+    if not isinstance(proofs, str) or not proofs:
+        return None
+    match = re.search(
+        r"Question:\n(.*?)\n\nAnswer",
+        task.input,
+        flags=re.DOTALL,
+    )
+    if match is None:
+        return None
+    question = match.group(1).strip().rstrip(".")
+    statements = [question]
+    if task.target == "false":
+        statements.insert(
+            0,
+            question.removeprefix("not ")
+            if question.startswith("not ")
+            else question.replace(" is ", " is not ", 1),
+        )
+    for statement in statements:
+        proof_match = re.search(
+            rf"(?<!\w){re.escape(statement)}\.\[(.*?)\](?=\s+[A-Z@]|$)",
+            proofs,
+        )
+        if proof_match is not None:
+            return _first_proof_alternative(proof_match.group(1))
+    return None
+
+
+def _first_proof_alternative(value: str) -> str:
+    value = value.strip()
+    if value.startswith("(") and value.endswith(")"):
+        depth = 0
+        wraps = True
+        for index, character in enumerate(value):
+            depth += character == "("
+            depth -= character == ")"
+            if depth == 0 and index != len(value) - 1:
+                wraps = False
+                break
+        if wraps:
+            value = value[1:-1].strip()
+    depth = 0
+    for index, character in enumerate(value):
+        depth += character == "("
+        depth -= character == ")"
+        if depth == 0 and value.startswith(" OR ", index + 1):
+            return value[: index + 1].strip()
+    return value

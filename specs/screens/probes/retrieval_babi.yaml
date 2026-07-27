@@ -1,0 +1,21 @@
+id: screen.retrieval.babi
+property: retrieval
+version: 1
+protocol: fixed
+requires: [generate]
+train:
+  select: {dataset: babi, task: qa2, split: train, variant: full}
+control:
+  select: {dataset: babi, task: qa2, split: test, variant: oracle}
+stress:
+  select: {dataset: babi, task: qa2, split: test, variant: full}
+pair_by: probe_group_id
+metrics:
+  primary: normalized_exact_match
+  optional: [token_f1, nll_bits]
+difficulty_axes: [distractor_count]
+options:
+  train_limit: 1000
+  eval_limit: 64
+  train_sampling_namespace: babi.qa2.full
+  eval_sampling_namespace: babi.qa2.oracle_full

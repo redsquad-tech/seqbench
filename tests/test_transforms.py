@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from datasets.transforms import (
+    correction_paraphrase_transform,
     counterfactual_transform,
+    credit_supervision_transform,
     noise_transform,
     nonce_transform,
+    rare_exception_transform,
     supervision_transform,
 )
 
@@ -86,7 +89,11 @@ def test_nonce_counterfactual_uses_remapped_metadata() -> None:
 def test_privileged_proof_context_is_one_to_one_and_keeps_target() -> None:
     source = task(
         dataset="proofwriter",
-        metadata={"proof": "rule1 -> fact2"},
+        input=(
+            "Theory:\nAlice is kind.\n\nQuestion:\nAlice is kind.\n\n"
+            "Answer (true, false, or unknown):"
+        ),
+        metadata={"proof": "@0: Alice is kind.[(triple1)]"},
         target="true",
         acceptable_outputs=("true",),
     )
@@ -95,3 +102,34 @@ def test_privileged_proof_context_is_one_to_one_and_keeps_target() -> None:
     assert transformed[0].target == source.target
     assert transformed[0].variant == "proof_context"
     assert "Training-only proof:" in transformed[0].input
+
+
+def test_credit_supervision_adds_only_the_auxiliary_proof() -> None:
+    source = task(
+        dataset="proofwriter",
+        input=(
+            "Theory:\nAlice is kind.\n\nQuestion:\nAlice is kind.\n\n"
+            "Answer (true, false, or unknown):"
+        ),
+        metadata={"proof": "@0: Alice is kind.[(triple1)]"},
+        target="true",
+        acceptable_outputs=("true",),
+    )
+    transformed = list(credit_supervision_transform(source))
+    assert len(transformed) == 1
+    assert transformed[0].target == "triple1"
+    assert {row.probe_group_id for row in transformed} == {source.probe_group_id}
+
+
+def test_correction_paraphrase_preserves_group_and_target() -> None:
+    source = task(split="test", input="What is the relation of Alice to Bob?")
+    transformed = next(iter(correction_paraphrase_transform(source)))
+    assert transformed.target == source.target
+    assert transformed.probe_group_id == source.probe_group_id
+    assert "State the kinship relation" in transformed.input
+
+
+def test_rare_exception_stream_is_deterministic() -> None:
+    left = list(rare_exception_transform(42)(task()))
+    right = list(rare_exception_transform(42)(task()))
+    assert [row.to_csv() for row in left] == [row.to_csv() for row in right]

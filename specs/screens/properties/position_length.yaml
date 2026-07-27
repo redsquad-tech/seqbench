@@ -1,0 +1,6 @@
+id: position_length_transfer
+version: 1
+required_probes:
+  - screen.position_length.babilong
+  - screen.position_length.mrcr
+aggregation: all_required

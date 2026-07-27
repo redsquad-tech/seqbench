@@ -1,0 +1,4 @@
+id: prediction
+version: 1
+required_probes: [screen.retrieval.babi]
+aggregation: all_required

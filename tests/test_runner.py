@@ -11,6 +11,7 @@ from seqbench.compare import compare_runs
 from seqbench.process import Algorithm, checkpoint_hash
 from seqbench.runner import Runner, _correction_summary
 from seqbench.schema import Task
+from seqbench.screen import screen_runs
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -181,6 +182,25 @@ def test_compare_aggregates_black_box_runs(tmp_path: Path) -> None:
     assert all("primary" in row for row in rows)
     assert (comparison / "comparison.csv").is_file()
     assert (comparison / "comparison.md").is_file()
+
+
+def test_screen_identical_single_seed_is_inconclusive(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    Runner(
+        run_spec=ROOT / "specs/runs/smoke.yaml",
+        algorithm_spec=ROOT / "tests/fixtures/adapter/algorithm.yaml",
+        task_paths=[ROOT / "tests/fixtures/data/tasks.csv"],
+        output=run,
+    ).run()
+    result = screen_runs(
+        spec_path=ROOT / "specs/runs/smoke.yaml",
+        candidate_runs=[run],
+        baseline_runs=[run],
+        output=tmp_path / "screen",
+    )
+    raw = json.loads((result / "screen.json").read_text())
+    assert raw["decision"] == "INCONCLUSIVE"
+    assert (result / "report.md").is_file()
 
 
 def test_correction_summary_uses_loss_direction() -> None:

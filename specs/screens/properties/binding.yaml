@@ -1,0 +1,6 @@
+id: role_binding
+version: 1
+required_probes:
+  - screen.binding.nonce
+  - screen.binding.counterfactual
+aggregation: all_required

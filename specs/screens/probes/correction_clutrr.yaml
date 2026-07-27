@@ -1,0 +1,24 @@
+id: screen.correction.clutrr
+property: online_correction
+version: 1
+protocol: correction
+requires: [learn, generate]
+train:
+  select: {dataset: clutrr, config: gen_train23_test2to10, split: train, variant: full}
+control:
+  select: {dataset: clutrr, config: gen_train23_test2to10, split: test, variant: full}
+stress:
+  select: {dataset: clutrr, config: gen_train23_test2to10, split: test, variant: correction_related}
+pair_by: probe_group_id
+metrics:
+  primary: normalized_exact_match
+  optional: [capped_nll_bits, target_probability_zero]
+difficulty_axes: [reasoning_depth]
+options:
+  train_limit: 10000
+  eval_limit: 64
+  paired_related: true
+  correction_episodes: 6
+  train_sampling_namespace: clutrr.base
+  eval_stratify_by: metadata.reasoning_depth
+  eval_stratify_all: true

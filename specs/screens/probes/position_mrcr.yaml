@@ -1,0 +1,19 @@
+id: screen.position_length.mrcr
+property: position_length_transfer
+version: 1
+protocol: fixed
+requires: [generate]
+train:
+  select: {dataset: mrcr, split: train}
+control:
+  select: {dataset: mrcr, config: 2needle, split: test, variant: full, metadata.position_bucket: start}
+stress:
+  select: {dataset: mrcr, config: 2needle, split: test, variant: full, metadata.position_bucket: end}
+pair_by: probe_group_id
+metrics:
+  primary: normalized_exact_match
+  optional: [token_f1, nll_bits]
+difficulty_axes: [context_length, relative_target_position]
+options:
+  eval_limit: 12
+  paired: false

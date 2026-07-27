@@ -1,0 +1,4 @@
+id: credit_assignment
+version: 1
+required_probes: [screen.credit.proofwriter]
+aggregation: all_required

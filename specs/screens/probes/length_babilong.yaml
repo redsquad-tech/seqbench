@@ -1,0 +1,21 @@
+id: screen.position_length.babilong
+property: position_length_transfer
+version: 1
+protocol: fixed
+requires: [generate]
+train:
+  select: {dataset: babilong, config: 0k, split: test, variant: full}
+control:
+  select: {dataset: babilong, config: 1k, split: test, variant: full}
+stress:
+  select: {dataset: babilong, config: 16k, split: test, variant: full}
+pair_by: probe_group_id
+metrics:
+  primary: normalized_exact_match
+  optional: [token_f1, nll_bits]
+difficulty_axes: [context_length]
+options:
+  train_limit: 1000
+  eval_limit: 40
+  eval_stratify_by: task
+  eval_stratify_all: true

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -50,7 +51,7 @@ def sample_tasks(
                         else "eval_stratify_by"
                     )
                     if stratify:
-                        inventory.strata[group] = str(_task_field(task, str(stratify)))
+                        inventory.strata[group] = _stratum(task, stratify)
 
     selected: dict[str, dict[str, set[str]]] = {}
     selection_report: dict[str, Any] = {}
@@ -62,25 +63,41 @@ def sample_tasks(
         eval_limit = _limit(probe, False, eval_limit_override)
 
         if cells["stress_train"].counts:
-            common_train = set(cells["train"].counts) & set(cells["stress_train"].counts)
-            train_groups = _choose(
-                common_train,
+            augment = probe.options.get("stress_train_mode") == "augment"
+            eligible_train = (
+                set(cells["train"].counts)
+                if augment
+                else set(cells["train"].counts) & set(cells["stress_train"].counts)
+            )
+            chosen["train"] = _choose(
+                eligible_train,
                 limit=train_limit,
                 seed=sampling_seed,
-                salt=f"{probe.id}:train_pair",
+                salt=f"{_sampling_namespace(probe, True)}:train_pair",
                 strata=cells["train"].strata,
-                declared=probe.options.get("train_strata"),
+                declared=_declared_strata(probe, cells["train"], True),
             )
-            chosen["train"] = train_groups
-            chosen["stress_train"] = train_groups
+            matching_stress = chosen["train"] & set(cells["stress_train"].counts)
+            stress_train_limit = probe.options.get("stress_train_limit")
+            if augment and stress_train_limit:
+                chosen["stress_train"] = _choose(
+                    matching_stress,
+                    limit=int(stress_train_limit),
+                    seed=sampling_seed,
+                    salt=f"{_sampling_namespace(probe, True)}:stress_train",
+                    strata=cells["stress_train"].strata,
+                    declared=None,
+                )
+            else:
+                chosen["stress_train"] = matching_stress
         else:
             chosen["train"] = _choose(
                 set(cells["train"].counts),
                 limit=train_limit,
                 seed=sampling_seed,
-                salt=f"{probe.id}:train",
+                salt=f"{_sampling_namespace(probe, True)}:train",
                 strata=cells["train"].strata,
-                declared=probe.options.get("train_strata"),
+                declared=_declared_strata(probe, cells["train"], True),
             )
             chosen["stress_train"] = set()
 
@@ -90,9 +107,9 @@ def sample_tasks(
                 common_eval,
                 limit=eval_limit,
                 seed=sampling_seed,
-                salt=f"{probe.id}:eval_pair",
+                salt=f"{_sampling_namespace(probe, False)}:eval_pair",
                 strata=cells["control"].strata,
-                declared=probe.options.get("eval_strata"),
+                declared=_declared_strata(probe, cells["control"], False),
             )
             chosen["control"] = eval_groups
             chosen["stress"] = eval_groups
@@ -102,9 +119,9 @@ def sample_tasks(
                     set(cells[section].counts),
                     limit=eval_limit,
                     seed=sampling_seed,
-                    salt=f"{probe.id}:{section}",
+                    salt=f"{_sampling_namespace(probe, False)}:{section}",
                     strata=cells[section].strata,
-                    declared=probe.options.get("eval_strata"),
+                    declared=_declared_strata(probe, cells[section], False),
                 )
         selected[probe.id] = chosen
         selection_report[probe.id] = {
@@ -169,6 +186,33 @@ def _task_field(task: Task, field: str) -> object:
     return getattr(task, field)
 
 
+def _stratum(task: Task, fields: object) -> str:
+    selected = fields if isinstance(fields, list) else [fields]
+    return json.dumps(
+        [_task_field(task, str(field)) for field in selected],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _sampling_namespace(probe: Probe, training: bool) -> str:
+    key = "train_sampling_namespace" if training else "eval_sampling_namespace"
+    return str(probe.options.get(key, probe.id))
+
+
+def _declared_strata(probe: Probe, inventory: _Inventory, training: bool) -> list[str] | None:
+    prefix = "train" if training else "eval"
+    declared = probe.options.get(f"{prefix}_strata")
+    if isinstance(declared, list):
+        fields = probe.options.get(f"{prefix}_stratify_by")
+        if isinstance(fields, list):
+            return [json.dumps(item, ensure_ascii=False) for item in declared]
+        return [json.dumps([item], ensure_ascii=False) for item in declared]
+    if probe.options.get(f"{prefix}_stratify_all"):
+        return sorted(set(inventory.strata.values()))
+    return None
+
+
 def _rank(seed: int, salt: str, group: str) -> bytes:
     return hashlib.sha256(f"{seed}:{salt}:{group}".encode()).digest()
 
@@ -203,6 +247,8 @@ def _validate_duplicates(probe: Probe, cells: dict[str, _Inventory]) -> None:
     if cells["stress_train"].counts:
         sections.extend(["train", "stress_train"])
     for section in sections:
+        if section == "stress_train" and probe.options.get("stress_train_mode") == "augment":
+            continue
         duplicates = [group for group, count in cells[section].counts.items() if count != 1]
         if duplicates:
             raise ValueError(

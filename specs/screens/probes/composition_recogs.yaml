@@ -1,0 +1,23 @@
+id: screen.composition.recogs
+property: composition
+version: 1
+protocol: fixed
+requires: [generate]
+train:
+  select: {dataset: recogs, config: recogs_v2, split: train, variant: full}
+control:
+  select: {dataset: recogs, config: recogs_v2, split: test, variant: full}
+stress:
+  select: {dataset: recogs, config: recogs_v2, split: generalization, variant: full}
+pair_by: source_example_id
+metrics:
+  primary: normalized_exact_match
+  optional: [token_f1, edit_similarity, nll_bits]
+difficulty_axes: [context_length]
+options:
+  train_limit: 10000
+  eval_limit: 84
+  paired: false
+  max_output_tokens: 256
+  eval_stratify_by: metadata.category
+  eval_stratify_all: true

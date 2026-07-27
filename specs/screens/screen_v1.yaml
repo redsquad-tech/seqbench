@@ -1,0 +1,35 @@
+id: screen_v1
+version: 1
+artifact_schema: 2
+sampling_seed: 2027
+probes:
+  - probes/retrieval_babi.yaml
+  - probes/length_babilong.yaml
+  - probes/position_mrcr.yaml
+  - probes/binding_nonce.yaml
+  - probes/binding_counterfactual.yaml
+  - probes/reasoning_proofwriter.yaml
+  - probes/composition_recogs.yaml
+  - probes/composition_slog.yaml
+  - probes/credit_proofwriter.yaml
+  - probes/noise_clutrr.yaml
+  - probes/rare_exceptions_clutrr.yaml
+  - probes/correction_clutrr.yaml
+properties:
+  - properties/prediction.yaml
+  - properties/retrieval.yaml
+  - properties/position_length.yaml
+  - properties/binding.yaml
+  - properties/reasoning.yaml
+  - properties/composition.yaml
+  - properties/credit.yaml
+  - properties/noise.yaml
+  - properties/correction.yaml
+seeds: [0]
+budgets:
+  - persistent_model_bytes: 160000000
+    train_wall_seconds: 900
+    infer_wall_seconds_per_example: 1.0
+bootstrap_replicates: 2000
+bootstrap_seed: 2027
+report_failures: 3
