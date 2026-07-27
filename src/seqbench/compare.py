@@ -9,6 +9,7 @@ from typing import Any
 import pyarrow.parquet as pq
 
 from .metrics import paired_bootstrap, unpaired_bootstrap
+from .runner import _correction_summary
 from .specs import Probe, RunSpec
 
 
@@ -26,49 +27,58 @@ def compare_runs(
     output.mkdir(parents=True)
     spec = RunSpec.load(spec_path)
     probes = {probe.id: probe for probe in (Probe.load(path) for path in spec.probes)}
-    predictions = {
-        label: _load_predictions(paths) for label, paths in labelled_runs.items()
+    manifests = {
+        label: _validate_manifests(paths, spec, probes) for label, paths in labelled_runs.items()
     }
+    if spec.artifact_schema >= 2:
+        selections = {label: _selection_contract(paths) for label, paths in labelled_runs.items()}
+        reference_selection = selections[reference]
+        mismatched = [
+            label for label, selection in selections.items() if selection != reference_selection
+        ]
+        if mismatched:
+            raise ValueError(f"comparison runs use different sampled tasks: {sorted(mismatched)}")
+    predictions = {label: _load_predictions(paths) for label, paths in labelled_runs.items()}
+    target_seeds = sorted({int(row["seed"]) for rows in predictions.values() for row in rows})
+    for label, rows_for_label in list(predictions.items()):
+        if manifests[label]["algorithm"].get("seed_invariant"):
+            predictions[label] = _broadcast_seed_invariant(rows_for_label, target_seeds)
     rows: list[dict[str, Any]] = []
     for probe_id, probe in probes.items():
         metrics = [probe.primary_metric]
         metrics.extend(
-            "capped_nll_bits" if item == "nll_bits" else item
-            for item in probe.optional_metrics
+            "capped_nll_bits" if item == "nll_bits" else item for item in probe.optional_metrics
         )
         if "nll_bits" in probe.optional_metrics:
             metrics.append("target_probability_zero")
         for metric in dict.fromkeys(metrics):
-            reference_rows = [
-                row for row in predictions[reference] if row["probe"] == probe_id
-            ]
+            reference_rows = [row for row in predictions[reference] if row["probe"] == probe_id]
             for label, all_rows in predictions.items():
                 selected = [row for row in all_rows if row["probe"] == probe_id]
                 control_stage, stress_stage = _stages(probe.protocol)
                 bootstrap = (
-                    paired_bootstrap
-                    if probe.options.get("paired", True)
-                    else unpaired_bootstrap
+                    paired_bootstrap if probe.options.get("paired", True) else unpaired_bootstrap
                 )
-                summary = bootstrap(
-                    [row for row in selected if row["stage"] == control_stage],
-                    [row for row in selected if row["stage"] == stress_stage],
-                    metric=metric,
-                    replicates=spec.bootstrap_replicates,
-                    seed=spec.bootstrap_seed,
+                summary = (
+                    _correction_summary(
+                        selected,
+                        metric=metric,
+                        replicates=spec.bootstrap_replicates,
+                        seed=spec.bootstrap_seed,
+                    )
+                    if probe.protocol == "correction"
+                    else bootstrap(
+                        [row for row in selected if row["stage"] == control_stage],
+                        [row for row in selected if row["stage"] == stress_stage],
+                        metric=metric,
+                        replicates=spec.bootstrap_replicates,
+                        seed=spec.bootstrap_seed,
+                    )
                 )
                 if not summary.get("groups", 0):
                     continue
-                reference_control = [
-                    row
-                    for row in reference_rows
-                    if row["stage"] == control_stage
-                ]
-                reference_stress = [
-                    row
-                    for row in reference_rows
-                    if row["stage"] == stress_stage
-                ]
+                reference_control = [row for row in reference_rows if row["stage"] == control_stage]
+                reference_stress = [row for row in reference_rows if row["stage"] == stress_stage]
                 delta_control = paired_bootstrap(
                     reference_control,
                     [row for row in selected if row["stage"] == control_stage],
@@ -99,6 +109,8 @@ def compare_runs(
                         "gap_ci95_low": summary["gap"]["ci95"][0],
                         "gap_ci95_high": summary["gap"]["ci95"][1],
                         "retention": summary["retention"],
+                        "related_gain": summary.get("related_gain"),
+                        "collateral_damage": summary.get("collateral_damage"),
                         "delta_control_vs_reference": _gap(delta_control),
                         "delta_stress_vs_reference": _gap(delta_stress),
                         "seeds": summary.get("seeds", 0),
@@ -142,46 +154,105 @@ def _resource_summary(labelled_runs: dict[str, list[Path]]) -> list[dict[str, An
         cells: list[dict[str, Any]] = []
         for path in paths:
             cells.extend(
-                json.loads((path / "resources.json").read_text(encoding="utf-8"))[
-                    "resources"
+                json.loads((path / "resources.json").read_text(encoding="utf-8"))["resources"]
+            )
+        budget_indices = sorted({int(item.get("budget_index", 0)) for item in cells})
+        for budget_index in budget_indices:
+            for operation in ("learn", "infer"):
+                selected = [
+                    item
+                    for item in cells
+                    if item["operation"] == operation
+                    and int(item.get("budget_index", 0)) == budget_index
                 ]
-            )
-        for operation in ("learn", "infer"):
-            selected = [item for item in cells if item["operation"] == operation]
-            if not selected:
-                continue
-            result.append(
-                {
-                    "model": label,
-                    "operation": operation,
-                    "calls": len(selected),
-                    "wall_seconds_total": sum(item["wall_seconds"] for item in selected),
-                    "wall_seconds_mean": sum(item["wall_seconds"] for item in selected)
-                    / len(selected),
-                    "peak_ram_bytes": max(item["peak_ram_bytes"] for item in selected),
-                    "checkpoint_bytes_max": max(
-                        (item.get("checkpoint_bytes", 0) for item in selected),
-                        default=0,
-                    ),
-                }
-            )
+                if not selected:
+                    continue
+                result.append(
+                    {
+                        "model": label,
+                        "budget_index": budget_index,
+                        "operation": operation,
+                        "calls": len(selected),
+                        "wall_seconds_total": sum(item["wall_seconds"] for item in selected),
+                        "wall_seconds_mean": sum(item["wall_seconds"] for item in selected)
+                        / len(selected),
+                        "peak_ram_bytes": max(item["peak_ram_bytes"] for item in selected),
+                        "checkpoint_bytes_max": max(
+                            (item.get("checkpoint_bytes", 0) for item in selected),
+                            default=0,
+                        ),
+                    }
+                )
     return result
+
+
+def _validate_manifests(
+    paths: list[Path], spec: RunSpec, probes: dict[str, Probe]
+) -> dict[str, Any]:
+    manifests = [json.loads((path / "manifest.json").read_text(encoding="utf-8")) for path in paths]
+    if not manifests:
+        raise ValueError("comparison label has no runs")
+    expected = (
+        spec.id,
+        spec.version,
+        spec.artifact_schema,
+        tuple(sorted((probe.id, probe.version, probe.primary_metric) for probe in probes.values())),
+    )
+    for path, manifest in zip(paths, manifests, strict=True):
+        actual = (
+            manifest.get("run"),
+            int(manifest.get("run_version", 1)),
+            int(manifest.get("artifact_schema", 1)),
+            tuple(
+                sorted(
+                    (
+                        item["probe"],
+                        int(item.get("version", 1)),
+                        item["primary_metric"],
+                    )
+                    for item in manifest.get("probe_contracts", [])
+                )
+            ),
+        )
+        if actual[:3] != expected[:3]:
+            raise ValueError(f"{path}: incompatible run contract {actual[:3]} != {expected[:3]}")
+        if actual[3] and actual[3] != expected[3]:
+            raise ValueError(f"{path}: incompatible probe contracts")
+        if spec.artifact_schema >= 2 and not (path / "selection.json").exists():
+            raise ValueError(f"{path}: selection.json is required for artifact schema v2")
+    algorithms = [manifest["algorithm"] for manifest in manifests]
+    if any(item != algorithms[0] for item in algorithms[1:]):
+        raise ValueError("comparison label mixes algorithm manifests")
+    return manifests[0]
+
+
+def _broadcast_seed_invariant(
+    rows: list[dict[str, Any]], target_seeds: list[int]
+) -> list[dict[str, Any]]:
+    source_seeds = sorted({int(row["seed"]) for row in rows})
+    if len(source_seeds) != 1 or len(target_seeds) <= 1:
+        return rows
+    source = source_seeds[0]
+    return [
+        {**row, "seed": seed} for seed in target_seeds for row in rows if int(row["seed"]) == source
+    ]
+
+
+def _selection_contract(paths: list[Path]) -> dict[str, Any]:
+    values = [json.loads((path / "selection.json").read_text(encoding="utf-8")) for path in paths]
+    if any(value != values[0] for value in values[1:]):
+        raise ValueError("runs for one comparison label use different sampled tasks")
+    return values[0]
 
 
 def _stages(protocol: str) -> tuple[str, str]:
     return (
-        ("before_related", "after_related")
-        if protocol == "correction"
-        else ("control", "stress")
+        ("before_related", "after_related") if protocol == "correction" else ("control", "stress")
     )
 
 
 def _gap(summary: dict[str, Any]) -> float | None:
-    return (
-        float(summary["gap"]["score"])
-        if summary.get("groups", 0)
-        else None
-    )
+    return float(summary["gap"]["score"]) if summary.get("groups", 0) else None
 
 
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -221,13 +292,13 @@ def _write_markdown(
             "",
             "## Resources",
             "",
-            "| Model | Operation | Calls | Wall total, s | Peak RAM | Checkpoint max |",
-            "|---|---|---:|---:|---:|---:|",
+            "| Model | Budget | Operation | Calls | Wall total, s | Peak RAM | Checkpoint max |",
+            "|---|---:|---|---:|---:|---:|---:|",
         ]
     )
     for row in resources:
         lines.append(
-            f"| {row['model']} | {row['operation']} | {row['calls']} | "
+            f"| {row['model']} | {row['budget_index']} | {row['operation']} | {row['calls']} | "
             f"{row['wall_seconds_total']:.2f} | {row['peak_ram_bytes']} | "
             f"{row['checkpoint_bytes_max']} |"
         )

@@ -1,0 +1,5 @@
+id: privileged_supervision
+version: 2
+required_probes:
+  - supervision.proofwriter.privileged_context
+aggregation: all_required

@@ -94,4 +94,3 @@ class Task:
                 default=str,
             ),
         }
-

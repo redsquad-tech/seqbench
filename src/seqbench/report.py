@@ -24,9 +24,7 @@ def write_reports(
         "| Property | Status |",
         "|---|---|",
     ]
-    lines.extend(
-        f"| {item['property']} | {item['status']} |" for item in properties
-    )
+    lines.extend(f"| {item['property']} | {item['status']} |" for item in properties)
     lines.extend(
         [
             "",
@@ -71,10 +69,7 @@ def write_reports(
     markdown = "\n".join(lines) + "\n"
     (output / "report.md").write_text(markdown, encoding="utf-8")
     rows = "".join(
-        "<tr>"
-        f"<td>{html.escape(item['property'])}</td>"
-        f"<td>{html.escape(item['status'])}</td>"
-        "</tr>"
+        f"<tr><td>{html.escape(item['property'])}</td><td>{html.escape(item['status'])}</td></tr>"
         for item in properties
     )
     (output / "report.html").write_text(
@@ -96,4 +91,3 @@ def write_reports(
 
 def _number(value: object) -> str:
     return "—" if not isinstance(value, (int, float)) else f"{value:.4f}"
-

@@ -38,12 +38,22 @@ Materialize fixed probes explicitly:
 .venv/bin/python tools/materialize_nonce.py \
   data/full.csv data/nonce.csv --seed 42
 .venv/bin/python tools/materialize_counterfactual.py \
-  data/full.csv data/counterfactual.csv
+  data/nonce.csv data/nonce-counterfactual.csv
 .venv/bin/python tools/materialize_noise.py \
   data/full.csv data/noise.csv --seed 42
 .venv/bin/python tools/materialize_supervision.py \
   data/full.csv data/supervision.csv
 ```
+
+For the causal v2 suite the same steps are collected in one direct command:
+
+```bash
+./prepare_causal_v2.sh
+```
+
+The v2 proof variant appends a training-only proof to the input while retaining
+the same final target and one row per source example. It is therefore reported
+as privileged supervision, not as evidence about final-only credit assignment.
 
 An interrupted direct build leaves an incomplete output file. Delete it and
 run the command again.
@@ -99,6 +109,11 @@ The static manifest is:
 }
 ```
 
+Deterministic algorithms may additionally declare `"seed_invariant": true`.
+Comparison then evaluates them once and broadcasts that fixed prediction vector
+across the learned models' seed axis without pretending that repeated runs are
+independent observations.
+
 ## Run
 
 ```bash
@@ -113,6 +128,15 @@ The static manifest is:
   --output runs/my-algorithm
 ```
 
+The corrected causal protocol is immutable and versioned separately:
+
+```bash
+.venv/bin/seqbench run specs/runs/causal_v2.yaml ...
+```
+
+It performs stable hash sampling after control/stress pairing, records the
+selected IDs, and uses an independent `sampling_seed`.
+
 The runner reads the CSV files once, routes rows through declarative YAML
 selectors, enforces budgets, checks that inference did not mutate checkpoints,
 and writes:
@@ -125,6 +149,9 @@ runs/my-algorithm/
     properties.json
     diagnostics.json
     resources.json
+    scaling.json
+    selection.json
+    resolved_specs.json
     report.md
     report.html
     curves/
@@ -150,4 +177,3 @@ pass/fail thresholds. Once weak and strong reference profiles exist:
 
 The golden test executes CSV → learn → infer → metrics → properties →
 Parquet/Markdown/HTML with a black-box fixture adapter.
-

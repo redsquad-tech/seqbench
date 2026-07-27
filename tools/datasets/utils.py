@@ -24,10 +24,7 @@ def set_max_csv_field_size() -> int:
 
 
 def stable_id(*parts: object) -> str:
-    return ":".join(
-        str(part).strip().replace("\\", "/").replace(":", "_")
-        for part in parts
-    )
+    return ":".join(str(part).strip().replace("\\", "/").replace(":", "_") for part in parts)
 
 
 def clean_text(value: Any) -> str:

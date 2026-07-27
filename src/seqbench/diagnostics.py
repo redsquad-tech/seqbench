@@ -17,16 +17,7 @@ def apply_diagnostics(
             if probe is None:
                 continue
             when = rule.get("when", {})
-            matched = all(
-                (
-                    probe.get("status") == expected
-                    if key == "status"
-                    else float(probe.get("retention", 0.0)) < float(expected)
-                    if key == "retention_lt"
-                    else False
-                )
-                for key, expected in when.items()
-            )
+            matched = all(_predicate(probe, key, expected) for key, expected in when.items())
             if matched:
                 diagnoses.append(
                     {
@@ -36,3 +27,30 @@ def apply_diagnostics(
                     }
                 )
     return diagnoses
+
+
+def _predicate(probe: dict[str, Any], expression: str, expected: object) -> bool:
+    for suffix, operation in (
+        ("_lt", lambda left, right: left < right),
+        ("_lte", lambda left, right: left <= right),
+        ("_gt", lambda left, right: left > right),
+        ("_gte", lambda left, right: left >= right),
+        ("_eq", lambda left, right: left == right),
+    ):
+        if expression.endswith(suffix):
+            value = _nested(probe, expression[: -len(suffix)])
+            if value is None:
+                return False
+            if suffix == "_eq":
+                return bool(operation(value, expected))
+            return bool(operation(float(value), float(expected)))
+    return _nested(probe, expression) == expected
+
+
+def _nested(value: dict[str, Any], path: str) -> object:
+    current: object = value
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current

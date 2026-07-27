@@ -4,6 +4,7 @@ from datasets.transforms import (
     counterfactual_transform,
     noise_transform,
     nonce_transform,
+    supervision_transform,
 )
 
 from seqbench.schema import Task
@@ -60,3 +61,37 @@ def test_counterfactual_keeps_probe_group_and_reverses_relation() -> None:
     assert transformed.probe_group_id == source.probe_group_id
     assert transformed.target == "son"
     assert "relation of Bob to Alice" in transformed.input
+
+
+def test_nonce_counterfactual_uses_remapped_metadata() -> None:
+    nonce = next(
+        iter(
+            nonce_transform(42)(
+                task(
+                    metadata={
+                        "query": ["Bob", "Alice"],
+                        "genders": {"Bob": "male"},
+                    },
+                    candidates=("mother", "son"),
+                )
+            )
+        )
+    )
+    transformed = next(iter(counterfactual_transform(nonce)))
+    assert transformed.variant == "nonce_counterfactual"
+    assert "Alice" not in transformed.input
+    assert transformed.target == "son"
+
+
+def test_privileged_proof_context_is_one_to_one_and_keeps_target() -> None:
+    source = task(
+        dataset="proofwriter",
+        metadata={"proof": "rule1 -> fact2"},
+        target="true",
+        acceptable_outputs=("true",),
+    )
+    transformed = list(supervision_transform(source))
+    assert len(transformed) == 1
+    assert transformed[0].target == source.target
+    assert transformed[0].variant == "proof_context"
+    assert "Training-only proof:" in transformed[0].input

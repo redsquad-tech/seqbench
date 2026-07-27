@@ -32,4 +32,3 @@ def test_selector_supports_metadata_ranges() -> None:
     )
     assert matches(task, {"metadata.reasoning_depth": {"gte": 3}})
     assert not matches(task, {"metadata.reasoning_depth": {"lte": 1}})
-

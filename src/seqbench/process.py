@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import shutil
 import signal
@@ -27,7 +28,9 @@ def checkpoint_files(path: Path) -> list[Path]:
 def checkpoint_hash(path: Path) -> str:
     digest = hashlib.sha256()
     for item in checkpoint_files(path):
-        digest.update(item.relative_to(path).as_posix().encode() if path.is_dir() else item.name.encode())
+        digest.update(
+            item.relative_to(path).as_posix().encode() if path.is_dir() else item.name.encode()
+        )
         with item.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
@@ -104,27 +107,28 @@ class Algorithm:
             raise TypeError(f"{path}: expected mapping")
         base = path.parent
         command = raw.get("command")
-        if not isinstance(command, list) or not command or not all(
-            isinstance(item, str) and item for item in command
+        if (
+            not isinstance(command, list)
+            or not command
+            or not all(isinstance(item, str) and item for item in command)
         ):
             raise ValueError(f"{path}: command must be a non-empty argv list")
         manifest_path = (base / raw["manifest"]).resolve()
         initial_model = (base / raw["initial_model"]).resolve()
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if set(manifest) != {
+        required = {
             "name",
             "version",
             "capabilities",
             "external_pretraining",
-        }:
+        }
+        if not required <= set(manifest) or set(manifest) - required - {"seed_invariant"}:
             raise ValueError(f"{manifest_path}: invalid manifest fields")
         capabilities = manifest["capabilities"]
         if set(capabilities) != {"learn", "generate", "score"}:
             raise ValueError(f"{manifest_path}: invalid capabilities")
         resolved_command = tuple(
-            str((base / item).absolute())
-            if item.startswith(("./", "../"))
-            else item
+            str((base / item).absolute()) if item.startswith(("./", "../")) else item
             for item in command
         )
         return cls(resolved_command, manifest_path, initial_model, manifest)
@@ -227,6 +231,12 @@ class Algorithm:
                     if value is not None and not isinstance(value, (int, float)):
                         raise RuntimeError(
                             f"{request['id']}: log_probability must be numeric or null"
+                        )
+                    if value is not None and (
+                        not math.isfinite(float(value)) or float(value) > 1e-9
+                    ):
+                        raise RuntimeError(
+                            f"{request['id']}: log_probability must be finite and <= 0"
                         )
             return responses, {
                 **result,

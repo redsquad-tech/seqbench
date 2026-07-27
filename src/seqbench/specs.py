@@ -17,6 +17,7 @@ def load_yaml(path: Path) -> dict[str, Any]:
 @dataclass(frozen=True, slots=True)
 class Probe:
     id: str
+    version: int
     property: str
     protocol: str
     requires: tuple[str, ...]
@@ -49,6 +50,7 @@ class Probe:
         metrics = raw["metrics"]
         return cls(
             id=str(raw["id"]),
+            version=int(raw["version"]),
             property=str(raw["property"]),
             protocol=str(raw["protocol"]),
             requires=tuple(raw["requires"]),
@@ -66,6 +68,7 @@ class Probe:
 @dataclass(frozen=True, slots=True)
 class PropertySpec:
     id: str
+    version: int
     required_probes: tuple[str, ...]
     supplementary_probes: tuple[str, ...]
     aggregation: str
@@ -75,6 +78,7 @@ class PropertySpec:
         raw = load_yaml(path)
         return cls(
             id=str(raw["id"]),
+            version=int(raw.get("version", 1)),
             required_probes=tuple(raw["required_probes"]),
             supplementary_probes=tuple(raw.get("supplementary_probes", [])),
             aggregation=str(raw.get("aggregation", "all_required")),
@@ -84,6 +88,9 @@ class PropertySpec:
 @dataclass(frozen=True, slots=True)
 class RunSpec:
     id: str
+    version: int
+    artifact_schema: int
+    sampling_seed: int
     probes: tuple[Path, ...]
     properties: tuple[Path, ...]
     diagnostics: tuple[Path, ...]
@@ -103,14 +110,13 @@ class RunSpec:
             raise ValueError(f"{path}: at least one budget is required")
         return cls(
             id=str(raw["id"]),
+            version=int(raw.get("version", 1)),
+            artifact_schema=int(raw.get("artifact_schema", 1)),
+            sampling_seed=int(raw.get("sampling_seed", 42)),
             probes=tuple((base / item).resolve() for item in raw["probes"]),
             properties=tuple((base / item).resolve() for item in raw["properties"]),
             diagnostics=tuple((base / item).resolve() for item in raw.get("diagnostics", [])),
-            calibration=(
-                (base / raw["calibration"]).resolve()
-                if raw.get("calibration")
-                else None
-            ),
+            calibration=((base / raw["calibration"]).resolve() if raw.get("calibration") else None),
             seeds=tuple(int(item) for item in raw.get("seeds", [0])),
             budgets=tuple(dict(item) for item in budgets),
             bootstrap_replicates=int(raw.get("bootstrap_replicates", 2000)),

@@ -93,4 +93,3 @@ def _download_babi(url: str, destination: Path) -> None:
             with source, target.open("wb") as output:
                 shutil.copyfileobj(source, output)
     archive_path.unlink()
-

@@ -15,10 +15,27 @@ from .utils import (
 )
 
 CLUTRR_LABELS = [
-    "aunt", "son-in-law", "grandfather", "brother", "sister", "father", "mother",
-    "grandmother", "uncle", "daughter-in-law", "grandson", "granddaughter",
-    "father-in-law", "mother-in-law", "nephew", "son", "daughter", "niece",
-    "husband", "wife", "sister-in-law",
+    "aunt",
+    "son-in-law",
+    "grandfather",
+    "brother",
+    "sister",
+    "father",
+    "mother",
+    "grandmother",
+    "uncle",
+    "daughter-in-law",
+    "grandson",
+    "granddaughter",
+    "father-in-law",
+    "mother-in-law",
+    "nephew",
+    "son",
+    "daughter",
+    "niece",
+    "husband",
+    "wife",
+    "sister-in-law",
 ]
 
 PROOFWRITER_LABELS = ["true", "false", "unknown"]
@@ -55,7 +72,9 @@ def serialize_messages(value: Any) -> str:
         content = message.get("content", "")
         if isinstance(content, list):
             content = "\n".join(
-                clean_text(part.get("text", part)) if isinstance(part, Mapping) else clean_text(part)
+                clean_text(part.get("text", part))
+                if isinstance(part, Mapping)
+                else clean_text(part)
                 for part in content
             )
         chunks.append(f"[{role}]\n{clean_text(content)}")
@@ -69,9 +88,16 @@ def normalize_label(value: Any) -> str:
         return "true" if int(value) == 1 else "false"
     text = clean_text(value).lower()
     mapping = {
-        "1": "true", "yes": "true", "entailed": "true", "entailment": "true",
-        "0": "false", "no": "false", "contradiction": "false",
-        "both unknown": "unknown", "unknown": "unknown", "uncertain": "unknown",
+        "1": "true",
+        "yes": "true",
+        "entailed": "true",
+        "entailment": "true",
+        "0": "false",
+        "no": "false",
+        "contradiction": "false",
+        "both unknown": "unknown",
+        "unknown": "unknown",
+        "uncertain": "unknown",
     }
     return mapping.get(text, text)
 
@@ -160,7 +186,9 @@ class BabiAdapter(Adapter):
         question_no = 0
         for event in story:
             event_type = event.get("type")
-            is_question = event_type in (1, "1", "question") or bool(clean_text(event.get("answer")))
+            is_question = event_type in (1, "1", "question") or bool(
+                clean_text(event.get("answer"))
+            )
             event_id = clean_text(event.get("id"))
             text = clean_text(event.get("text"))
             if not is_question:
@@ -189,9 +217,7 @@ class BabiAdapter(Adapter):
                     split=split,
                     task=task,
                     variant=variant,
-                    probe_group_id=stable_id(
-                        "probe-group-v1", self.name, source_key, source_id
-                    ),
+                    probe_group_id=stable_id("probe-group-v1", self.name, source_key, source_id),
                     input=prompt,
                     expected_output=answer,
                     metadata={
@@ -230,7 +256,9 @@ class BABILongAdapter(Adapter):
         context = clean_text(first_present(row, "input", "context", "passage", "story"))
         question = clean_text(first_present(row, "question", "query"))
         target = clean_text(first_present(row, "target", "answer", "label"))
-        task = clean_text(first_present(row, "task", default=split if split.startswith("qa") else "babi"))
+        task = clean_text(
+            first_present(row, "task", default=split if split.startswith("qa") else "babi")
+        )
         normalized_split = "test" if split.startswith("qa") or split == "unknown" else split
         prompt = f"Context:\n{context}\n\nQuestion:\n{question}\n\nAnswer:"
         source_id = clean_text(first_present(row, "id", default=source_index))
@@ -241,9 +269,7 @@ class BABILongAdapter(Adapter):
             split=normalized_split,
             task=task,
             variant="full",
-            probe_group_id=stable_id(
-                "probe-group-v1", self.name, task, source_id
-            ),
+            probe_group_id=stable_id("probe-group-v1", self.name, task, source_id),
             input=prompt,
             expected_output=target,
             metadata={
@@ -319,9 +345,7 @@ class CLUTRRAdapter(Adapter):
                 split=split,
                 task=task_name,
                 variant=variant,
-                probe_group_id=stable_id(
-                    "probe-group-v1", self.name, source_key, source_index
-                ),
+                probe_group_id=stable_id("probe-group-v1", self.name, source_key, source_index),
                 input=prompt,
                 expected_output=target,
                 answer_candidates=CLUTRR_LABELS,
@@ -396,9 +420,7 @@ class ProofWriterAdapter(Adapter):
             split=split,
             task=f"deduction_depth_{max_depth}" if max_depth != "" else "deduction",
             variant="full",
-            probe_group_id=stable_id(
-                "probe-group-v1", self.name, source_key, source_index
-            ),
+            probe_group_id=stable_id("probe-group-v1", self.name, source_key, source_index),
             input=prompt,
             expected_output=answer,
             answer_candidates=PROOFWRITER_LABELS,

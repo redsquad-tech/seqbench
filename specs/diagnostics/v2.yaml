@@ -1,0 +1,22 @@
+version: 2
+rules:
+  - probe: retrieval.babi.full_vs_oracle
+    when: {retention_lt: 0.7}
+    diagnosis: retrieval_or_routing_bottleneck
+    next_probes: [retrieval.babilong.length_transfer_v2]
+  - probe: binding.clutrr.nonce
+    when: {retention_lt: 0.7}
+    diagnosis: lexical_shortcut_or_memorization
+    next_probes: [binding.clutrr.counterfactual_v2]
+  - probe: binding.clutrr.counterfactual_v2
+    when: {stress.score_lt: 0.5}
+    diagnosis: counterfactual_role_binding_failure
+    next_probes: [binding.clutrr.role_swap_by_depth]
+  - probe: composition.recogs.novel_output
+    when: {output_novelty.novel.exact_match_lt: 0.5}
+    diagnosis: whole_value_retrieval_without_productive_decoder
+    next_probes: [composition.slog.structural]
+  - probe: supervision.proofwriter.privileged_context
+    when: {retention_lt: 0.7}
+    diagnosis: privileged_context_does_not_transfer_to_final_answer
+    next_probes: [reasoning.proofwriter.depth]

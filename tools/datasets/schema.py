@@ -24,9 +24,7 @@ class TaskRow:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_csv_dict(self) -> dict[str, str]:
-        source_id = self.source_example_id or str(
-            self.metadata.get("source_id", self.id)
-        )
+        source_id = self.source_example_id or str(self.metadata.get("source_id", self.id))
         acceptable = self.acceptable_outputs or [self.expected_output]
         return {
             "id": self.id,
@@ -62,4 +60,3 @@ class TaskRow:
 
 
 __all__ = ["CSV_COLUMNS", "TaskRow"]
-

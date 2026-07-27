@@ -1,0 +1,7 @@
+id: retrieval
+version: 2
+required_probes:
+  - retrieval.babi.full_vs_oracle
+supplementary_probes:
+  - retrieval.babilong.length_transfer_v2
+aggregation: all_required

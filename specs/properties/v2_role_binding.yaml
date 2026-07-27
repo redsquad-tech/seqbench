@@ -1,0 +1,6 @@
+id: role_binding
+version: 2
+required_probes:
+  - binding.clutrr.nonce
+  - binding.clutrr.counterfactual_v2
+aggregation: all_required

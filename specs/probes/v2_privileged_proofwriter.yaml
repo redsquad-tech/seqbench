@@ -1,0 +1,21 @@
+id: supervision.proofwriter.privileged_context
+property: privileged_supervision
+version: 2
+protocol: training_contrast
+requires: [learn, generate]
+train:
+  select: {dataset: proofwriter, config: depth-5, split: train, variant: full}
+control:
+  select: {dataset: proofwriter, config: depth-5, split: test, variant: full}
+stress:
+  select: {dataset: proofwriter, config: depth-5, split: test, variant: full}
+pair_by: probe_group_id
+metrics:
+  primary: normalized_exact_match
+  optional: [candidate_accuracy, candidate_conditional_nll_bits, nll_bits]
+difficulty_axes: [reasoning_depth]
+options:
+  stress_train: {dataset: proofwriter, config: depth-5, split: train, variant: proof_context}
+  train_limit_by: probe_group_id
+  train_limit: 10000
+  eval_limit: 2000

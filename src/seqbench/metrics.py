@@ -5,6 +5,7 @@ import random
 import re
 import unicodedata
 from collections import defaultdict
+from collections.abc import Iterable
 from typing import Any
 
 
@@ -53,14 +54,26 @@ def edit_similarity(output: str, target: str) -> float:
     return 1.0 - previous[-1] / max(len(left), len(right), 1)
 
 
+def _logsumexp(values: Iterable[float | None]) -> float | None:
+    finite = [float(value) for value in values if value is not None and math.isfinite(float(value))]
+    if not finite:
+        return None
+    maximum = max(finite)
+    return maximum + math.log(sum(math.exp(value - maximum) for value in finite))
+
+
 def enrich_prediction(row: dict[str, Any]) -> dict[str, Any]:
     result = dict(row)
-    result["normalized_exact_match"] = normalized_exact_match(
-        row["output"], tuple(row["acceptable_outputs"])
+    acceptable = tuple(row["acceptable_outputs"]) or (row["target"],)
+    result["normalized_exact_match"] = normalized_exact_match(row["output"], acceptable)
+    result["token_f1"] = max(token_f1(row["output"], item) for item in acceptable)
+    result["edit_similarity"] = max(edit_similarity(row["output"], item) for item in acceptable)
+    acceptable_logs = row.get("acceptable_log_probabilities", {})
+    log_probability = (
+        _logsumexp(acceptable_logs.values())
+        if acceptable_logs
+        else row.get("target_log_probability")
     )
-    result["token_f1"] = token_f1(row["output"], row["target"])
-    result["edit_similarity"] = edit_similarity(row["output"], row["target"])
-    log_probability = row.get("target_log_probability")
     result["nll_bits"] = (
         math.inf if log_probability is None else -float(log_probability) / math.log(2)
     )
@@ -68,9 +81,10 @@ def enrich_prediction(row: dict[str, Any]) -> dict[str, Any]:
     result["capped_nll_bits"] = min(result["nll_bits"], 1024.0)
     candidates = row.get("candidate_log_probabilities", {})
     result["candidate_accuracy"] = None
+    result["candidate_conditional_nll_bits"] = None
     result["candidate_nll_bits"] = None
     result["mrr"] = None
-    if candidates and row["target"] in candidates:
+    if candidates:
         ranked = sorted(
             candidates,
             key=lambda item: (
@@ -80,12 +94,29 @@ def enrich_prediction(row: dict[str, Any]) -> dict[str, Any]:
             ),
             reverse=True,
         )
-        result["candidate_accuracy"] = float(ranked[0] == row["target"])
-        result["mrr"] = 1.0 / (ranked.index(row["target"]) + 1)
-        target_log = candidates[row["target"]]
-        result["candidate_nll_bits"] = (
-            math.inf if target_log is None else -float(target_log) / math.log(2)
-        )
+        acceptable_candidates = [item for item in ranked if item in acceptable]
+        if acceptable_candidates:
+            result["candidate_accuracy"] = float(ranked[0] in acceptable)
+            result["mrr"] = 1.0 / (ranked.index(acceptable_candidates[0]) + 1)
+            numerator = _logsumexp(candidates[item] for item in acceptable_candidates)
+            denominator = _logsumexp(candidates.values())
+            result["candidate_conditional_nll_bits"] = (
+                math.inf
+                if numerator is None or denominator is None
+                else -(numerator - denominator) / math.log(2)
+            )
+            result["candidate_nll_bits"] = result["candidate_conditional_nll_bits"]
+    result["seen_output_exact_match"] = (
+        result["normalized_exact_match"] if row.get("target_seen_in_train") is True else None
+    )
+    result["novel_output_exact_match"] = (
+        result["normalized_exact_match"] if row.get("target_seen_in_train") is False else None
+    )
+    result["copy_rate"] = (
+        float(row["output_seen_in_train"])
+        if isinstance(row.get("output_seen_in_train"), bool)
+        else None
+    )
     return result
 
 
@@ -98,22 +129,24 @@ HIGHER_IS_BETTER = {
     "valid_structure_rate": True,
     "nll_bits": False,
     "capped_nll_bits": False,
+    "candidate_conditional_nll_bits": False,
     "candidate_nll_bits": False,
     "target_probability_zero": False,
+    "counterfactual_consistency": True,
 }
 
 
 def higher_is_better(metric: str) -> bool:
-    return HIGHER_IS_BETTER.get(metric, True)
+    if metric not in HIGHER_IS_BETTER:
+        raise ValueError(f"unknown metric direction: {metric}")
+    return HIGHER_IS_BETTER[metric]
 
 
 def _mean(values: list[float]) -> float:
     return sum(values) / len(values)
 
 
-def _seed_group_scores(
-    rows: list[dict[str, Any]], metric: str
-) -> dict[int, dict[str, float]]:
+def _seed_group_scores(rows: list[dict[str, Any]], metric: str) -> dict[int, dict[str, float]]:
     grouped: dict[tuple[int, str], list[float]] = defaultdict(list)
     for row in rows:
         value = row.get(metric)
@@ -150,33 +183,23 @@ def paired_bootstrap(
     control = _seed_group_scores(control_rows, metric)
     stress = _seed_group_scores(stress_rows, metric)
     seeds = sorted(set(control) & set(stress))
-    common = {
-        seed: sorted(set(control[seed]) & set(stress[seed])) for seed in seeds
-    }
-    seeds = [seed for seed in seeds if common[seed]]
+    per_seed = [set(control[item]) & set(stress[item]) for item in seeds]
+    common_groups = sorted(set.intersection(*per_seed)) if per_seed else []
+    seeds = [item for item in seeds if common_groups]
     if not seeds:
         return {"groups": 0}
-    control_by_seed = [
-        _mean([control[seed][group] for group in common[seed]]) for seed in seeds
-    ]
-    stress_by_seed = [
-        _mean([stress[seed][group] for group in common[seed]]) for seed in seeds
-    ]
+    control_by_seed = [_mean([control[seed][group] for group in common_groups]) for seed in seeds]
+    stress_by_seed = [_mean([stress[seed][group] for group in common_groups]) for seed in seeds]
     rng = random.Random(seed)
     samples: list[tuple[float, float, float]] = []
     for _ in range(replicates):
         sampled_seeds = [seeds[rng.randrange(len(seeds))] for _ in seeds]
+        sampled_groups = [common_groups[rng.randrange(len(common_groups))] for _ in common_groups]
         left_seed: list[float] = []
         right_seed: list[float] = []
         for sampled_seed in sampled_seeds:
-            groups = common[sampled_seed]
-            sampled_groups = [groups[rng.randrange(len(groups))] for _ in groups]
-            left_seed.append(
-                _mean([control[sampled_seed][group] for group in sampled_groups])
-            )
-            right_seed.append(
-                _mean([stress[sampled_seed][group] for group in sampled_groups])
-            )
+            left_seed.append(_mean([control[sampled_seed][group] for group in sampled_groups]))
+            right_seed.append(_mean([stress[sampled_seed][group] for group in sampled_groups]))
         left = _mean(left_seed)
         right = _mean(right_seed)
         samples.append((left, right, right - left))
@@ -185,7 +208,8 @@ def paired_bootstrap(
     stress_mean = _mean(stress_by_seed)
     gap = stress_mean - control_mean
     return {
-        "groups": sum(len(common[item]) for item in seeds),
+        "groups": len(common_groups),
+        "seed_group_cells": len(common_groups) * len(seeds),
         "seeds": len(seeds),
         "control": {"score": control_mean, "ci95": _interval(samples, 0)},
         "stress": {"score": stress_mean, "ci95": _interval(samples, 1)},
@@ -205,40 +229,40 @@ def unpaired_bootstrap(
     control = _seed_group_scores(control_rows, metric)
     stress = _seed_group_scores(stress_rows, metric)
     seeds = sorted(set(control) & set(stress))
-    seeds = [seed for seed in seeds if control[seed] and stress[seed]]
+    seeds = [item for item in seeds if control[item] and stress[item]]
     if not seeds:
+        return {"groups": 0}
+    control_groups = sorted(set.intersection(*(set(control[item]) for item in seeds)))
+    stress_groups = sorted(set.intersection(*(set(stress[item]) for item in seeds)))
+    if not control_groups or not stress_groups:
         return {"groups": 0}
     rng = random.Random(seed)
     samples: list[tuple[float, float, float]] = []
     for _ in range(replicates):
         sampled_seeds = [seeds[rng.randrange(len(seeds))] for _ in seeds]
+        sampled_control = [
+            control_groups[rng.randrange(len(control_groups))] for _ in control_groups
+        ]
+        sampled_stress = [stress_groups[rng.randrange(len(stress_groups))] for _ in stress_groups]
         left_seed: list[float] = []
         right_seed: list[float] = []
         for sampled_seed in sampled_seeds:
-            left_values = list(control[sampled_seed].values())
-            right_values = list(stress[sampled_seed].values())
-            left_seed.append(
-                _mean([left_values[rng.randrange(len(left_values))] for _ in left_values])
-            )
-            right_seed.append(
-                _mean(
-                    [right_values[rng.randrange(len(right_values))] for _ in right_values]
-                )
-            )
+            left_seed.append(_mean([control[sampled_seed][group] for group in sampled_control]))
+            right_seed.append(_mean([stress[sampled_seed][group] for group in sampled_stress]))
         left = _mean(left_seed)
         right = _mean(right_seed)
         samples.append((left, right, right - left))
-    control_mean = _mean([_mean(list(control[item].values())) for item in seeds])
-    stress_mean = _mean([_mean(list(stress[item].values())) for item in seeds])
+    control_mean = _mean(
+        [_mean([control[item][group] for group in control_groups]) for item in seeds]
+    )
+    stress_mean = _mean([_mean([stress[item][group] for group in stress_groups]) for item in seeds])
     gap = stress_mean - control_mean
     return {
-        "groups": min(
-            sum(len(control[item]) for item in seeds),
-            sum(len(stress[item]) for item in seeds),
-        ),
+        "groups": min(len(control_groups), len(stress_groups)),
+        "seed_group_cells": min(len(control_groups), len(stress_groups)) * len(seeds),
         "seeds": len(seeds),
-        "control_examples": sum(len(control[item]) for item in seeds),
-        "stress_examples": sum(len(stress[item]) for item in seeds),
+        "control_examples": len(control_groups),
+        "stress_examples": len(stress_groups),
         "control": {"score": control_mean, "ci95": _interval(samples, 0)},
         "stress": {"score": stress_mean, "ci95": _interval(samples, 1)},
         "gap": {"score": gap, "ci95": _interval(samples, 2)},
@@ -251,15 +275,22 @@ def difficulty_curves(
 ) -> list[dict[str, Any]]:
     curves: list[dict[str, Any]] = []
     for axis in axes:
-        cells: dict[tuple[str, str], list[float]] = defaultdict(list)
+        cells: dict[tuple[int, str, str], list[float]] = defaultdict(list)
         for row in rows:
             value = row.get(metric)
             difficulty = row.get("metadata", {}).get(axis)
             if difficulty is not None and isinstance(value, (int, float)):
-                cells[(str(row["stage"]), str(difficulty))].append(float(value))
-        for (stage, difficulty), values in sorted(cells.items()):
+                cells[
+                    (
+                        int(row.get("budget_index", 0)),
+                        str(row["stage"]),
+                        str(difficulty),
+                    )
+                ].append(float(value))
+        for (budget_index, stage, difficulty), values in sorted(cells.items()):
             curves.append(
                 {
+                    "budget_index": budget_index,
                     "stage": stage,
                     "axis": axis,
                     "difficulty": difficulty,
@@ -269,3 +300,44 @@ def difficulty_curves(
                 }
             )
     return curves
+
+
+def output_novelty_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for name, expected in (("seen", True), ("novel", False)):
+        selected = [row for row in rows if row.get("target_seen_in_train") is expected]
+        if not selected:
+            result[name] = {"examples": 0}
+            continue
+        result[name] = {
+            "examples": len(selected),
+            "exact_match": _mean([float(row["normalized_exact_match"]) for row in selected]),
+            "capped_nll_bits": _mean([float(row["capped_nll_bits"]) for row in selected]),
+            "zero_probability_rate": _mean(
+                [float(row["target_probability_zero"]) for row in selected]
+            ),
+            "copy_rate": _mean(
+                [
+                    float(row["output_seen_in_train"])
+                    for row in selected
+                    if isinstance(row.get("output_seen_in_train"), bool)
+                ]
+            )
+            if any(isinstance(row.get("output_seen_in_train"), bool) for row in selected)
+            else None,
+        }
+    novel = [row for row in rows if row.get("target_seen_in_train") is False]
+    result["novel_valid_rate"] = (
+        _mean(
+            [
+                float(
+                    row["normalized_exact_match"] == 1.0
+                    and row.get("output_seen_in_train") is False
+                )
+                for row in novel
+            ]
+        )
+        if novel
+        else None
+    )
+    return result

@@ -257,9 +257,7 @@ def slog_sources(root: Path) -> list[SourceSpec]:
     for config in ("cogs_LF", "varfree_LF"):
         for split, stem in SPLIT_FILES[:3]:
             relative = f"data/{config}/{stem}.tsv"
-            sources.append(
-                _spec("slog", root, relative, config=config, split=split, kind="tsv")
-            )
+            sources.append(_spec("slog", root, relative, config=config, split=split, kind="tsv"))
         member = members[config]
         sources.append(
             SourceSpec(

@@ -55,40 +55,52 @@ def derived(task: Task, variant: str, **changes: object) -> Task:
 
 
 def entity_names(task: Task) -> list[str]:
-    names = set(re.findall(r"\b[A-Z][a-z]+\b", task.input))
+    names: set[str] = set()
     query = _literal(task.metadata.get("query"))
     if isinstance(query, (list, tuple)):
         names.update(str(value) for value in query[:2])
     genders = _literal(task.metadata.get("genders"))
     if isinstance(genders, dict):
         names.update(str(value) for value in genders)
+    if names:
+        return sorted(names)
+    names.update(re.findall(r"\b[A-Z][a-z]+\b", task.input))
+    names.difference_update({"Context", "Question", "Answer", "What"})
     return sorted(names)
 
 
 def nonce_transform(seed: int) -> Callable[[Task], Iterator[Task]]:
-    rng = random.Random(seed)
-
     def transform(task: Task) -> Iterator[Task]:
         if task.dataset != "clutrr" or task.variant != "full":
             return
         names = entity_names(task)
+        rng = random.Random(f"{seed}:{task.probe_group_id}")
         rng.shuffle(names)
         mapping = {name: f"ent_{index:04d}" for index, name in enumerate(names)}
         value = task.input
         for name in sorted(mapping, key=len, reverse=True):
             value = re.sub(rf"\b{re.escape(name)}\b", mapping[name], value)
-        metadata = {
+        metadata: dict[str, object] = {
             **task.metadata,
             "nonce_seed": seed,
             "nonce_entity_count": len(mapping),
+            "nonce_mapping": mapping,
         }
+        query = _literal(task.metadata.get("query"))
+        if isinstance(query, (list, tuple)):
+            metadata["query"] = [mapping.get(str(item), str(item)) for item in query]
+        genders = _gender_map(task.metadata.get("genders"))
+        if genders:
+            metadata["genders"] = {
+                mapping.get(name, name): gender for name, gender in genders.items()
+            }
         yield derived(task, "nonce", input=value, metadata=metadata)
 
     return transform
 
 
 def counterfactual_transform(task: Task) -> Iterator[Task]:
-    if task.dataset != "clutrr" or task.variant != "full":
+    if task.dataset != "clutrr" or task.variant not in {"full", "nonce"}:
         return
     query = _literal(task.metadata.get("query"))
     if not isinstance(query, (list, tuple)) or len(query) < 2:
@@ -105,13 +117,23 @@ def counterfactual_transform(task: Task) -> Iterator[Task]:
         task.input,
         flags=re.DOTALL,
     )
+    variant = "nonce_counterfactual" if task.variant == "nonce" else "counterfactual"
+    output_map = {
+        candidate: inverse
+        for candidate in task.candidates
+        if (inverse := _inverse_relation(candidate, genders.get(first, ""))) is not None
+    }
     yield derived(
         task,
-        "counterfactual",
+        variant,
         input=value,
         target=target,
         acceptable_outputs=(target,),
-        metadata={**task.metadata, "query": [second, first]},
+        metadata={
+            **task.metadata,
+            "query": [second, first],
+            "counterfactual_output_map": output_map,
+        },
     )
 
 
@@ -154,19 +176,15 @@ def noise_transform(seed: int) -> Callable[[Task], Iterator[Task]]:
 def supervision_transform(task: Task) -> Iterator[Task]:
     if task.dataset != "proofwriter" or task.split != "train":
         return
-    yield derived(task, "proof_supervised")
     proof = task.metadata.get("proof")
-    if proof:
-        yield replace(
-            task,
-            id=f"{task.probe_group_id}:proof_supervised:proof",
-            variant="proof_supervised",
-            input=f"{task.input}\n\nProduce a valid proof:",
-            target=str(proof),
-            acceptable_outputs=(str(proof),),
-            candidates=(),
-            metadata={**task.metadata, "supervision_role": "proof"},
-        )
+    if not proof:
+        return
+    yield derived(
+        task,
+        "proof_context",
+        input=f"{task.input}\n\nTraining-only proof:\n{proof}",
+        metadata={**task.metadata, "supervision_role": "privileged_proof_context"},
+    )
 
 
 def _literal(value: object) -> object:
@@ -179,9 +197,7 @@ def _literal(value: object) -> object:
 
 
 def _gender_map(value: object) -> dict[str, str]:
-    if isinstance(value, str) and ":" in value and not value.lstrip().startswith(
-        ("{", "[")
-    ):
+    if isinstance(value, str) and ":" in value and not value.lstrip().startswith(("{", "[")):
         value = {
             item.split(":", 1)[0].strip(): item.split(":", 1)[1].strip()
             for item in value.split(",")
@@ -191,11 +207,7 @@ def _gender_map(value: object) -> dict[str, str]:
     if not isinstance(parsed, dict):
         return {}
     return {
-        str(name): (
-            "male"
-            if str(gender).lower() in {"m", "male", "man", "boy"}
-            else "female"
-        )
+        str(name): ("male" if str(gender).lower() in {"m", "male", "man", "boy"} else "female")
         for name, gender in parsed.items()
     }
 
